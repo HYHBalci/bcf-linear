@@ -55,11 +55,44 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// sample_beta_j
+double sample_beta_j(int N, NumericVector r_beta, NumericVector z, NumericVector w_j, double tau_j, double sigma);
+RcppExport SEXP _bcf_sample_beta_j(SEXP NSEXP, SEXP r_betaSEXP, SEXP zSEXP, SEXP w_jSEXP, SEXP tau_jSEXP, SEXP sigmaSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type N(NSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type r_beta(r_betaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type z(zSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type w_j(w_jSEXP);
+    Rcpp::traits::input_parameter< double >::type tau_j(tau_jSEXP);
+    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
+    rcpp_result_gen = Rcpp::wrap(sample_beta_j(N, r_beta, z, w_j, tau_j, sigma));
+    return rcpp_result_gen;
+END_RCPP
+}
+// sample_tau_j_slice
+double sample_tau_j_slice(double tau_old, double beta_j, double sigma, double step_out, int max_steps);
+RcppExport SEXP _bcf_sample_tau_j_slice(SEXP tau_oldSEXP, SEXP beta_jSEXP, SEXP sigmaSEXP, SEXP step_outSEXP, SEXP max_stepsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type tau_old(tau_oldSEXP);
+    Rcpp::traits::input_parameter< double >::type beta_j(beta_jSEXP);
+    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
+    Rcpp::traits::input_parameter< double >::type step_out(step_outSEXP);
+    Rcpp::traits::input_parameter< int >::type max_steps(max_stepsSEXP);
+    rcpp_result_gen = Rcpp::wrap(sample_tau_j_slice(tau_old, beta_j, sigma, step_out, max_steps));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 RcppExport SEXP _rcpp_module_boot_TreeSamples();
 
 static const R_CallMethodDef CallEntries[] = {
     {"_bcf_bcfoverparRcppClean", (DL_FUNC) &_bcf_bcfoverparRcppClean, 34},
+    {"_bcf_sample_beta_j", (DL_FUNC) &_bcf_sample_beta_j, 6},
+    {"_bcf_sample_tau_j_slice", (DL_FUNC) &_bcf_sample_tau_j_slice, 5},
     {"_rcpp_module_boot_TreeSamples", (DL_FUNC) &_rcpp_module_boot_TreeSamples, 0},
     {NULL, NULL, 0}
 };

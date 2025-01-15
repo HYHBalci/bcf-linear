@@ -5,3 +5,11 @@ bcfoverparRcppClean <- function(y_, z_, w_, x_con_, x_mod_, x_con_info_list, x_m
     .Call('_bcf_bcfoverparRcppClean', PACKAGE = 'bcf', y_, z_, w_, x_con_, x_mod_, x_con_info_list, x_mod_info_list, random_des, random_var, random_var_ix, random_var_df, burn, nd, thin, ntree_mod, ntree_con, lambda, nu, con_sd, mod_sd, con_alpha, con_beta, mod_alpha, mod_beta, treef_con_name_, treef_mod_name_, status_interval, RJ, use_mscale, use_bscale, b_half_normal, trt_init, verbose_sigma, no_output)
 }
 
+sample_beta_j <- function(N, r_beta, z, w_j, tau_j, sigma) {
+    .Call('_bcf_sample_beta_j', PACKAGE = 'bcf', N, r_beta, z, w_j, tau_j, sigma)
+}
+
+sample_tau_j_slice <- function(tau_old, beta_j, sigma, step_out = 0.5, max_steps = 50L) {
+    .Call('_bcf_sample_tau_j_slice', PACKAGE = 'bcf', tau_old, beta_j, sigma, step_out, max_steps)
+}
+
