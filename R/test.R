@@ -133,3 +133,6 @@ cat("beta0 =", mean(res$beta0), "\n")
 cat("beta  =", mean(res$beta),  "\n")
 cat("tau   =", mean(res$tau),   "\n")
 cat("sigma =", mean(res$sigma), "\n")
+
+
+hist(res$beta)

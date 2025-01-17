@@ -157,3 +157,61 @@ double sample_tau_j_slice(
   // If we never find a point in 'max_steps' tries, return old value
   return tau_old;
 }
+
+// [[Rcpp::export]]
+double sample_alpha(
+    int N,
+    NumericVector r_alpha,     // partial residual
+    double sigma,              // current residual sd
+    double alpha_prior_sd = 10.0
+) {
+  // prior alpha ~ N(0, alpha_prior_sd^2)
+  double prior_var   = alpha_prior_sd * alpha_prior_sd;
+  
+  // data precision = N / sigma^2
+  double prec_data   = (double)N / (sigma*sigma);
+  // prior precision
+  double prec_prior  = 1.0 / prior_var;
+   
+  double prec_post   = prec_data + prec_prior;
+  double var_post    = 1.0 / prec_post;
+   
+  // sum of partial residual
+  double sum_r = 0.0;
+  for(int i=0; i<N; i++){
+    sum_r += r_alpha[i];
+  } 
+  double mean_post = var_post * ( sum_r / (sigma*sigma) );
+   
+  // draw from Normal(mean_post, sqrt(var_post))
+  double alpha_draw = R::rnorm(mean_post, std::sqrt(var_post));
+  return alpha_draw;
+} 
+
+// [[Rcpp::export]]
+double sample_sigma2_ig(
+    int N,
+    NumericVector resid,   // vector of residuals e_i
+    double shape_prior = 1.0, 
+    double rate_prior  = 0.001
+) {
+  // compute residual sum of squares
+  double rss = 0.0;
+  for(int i=0; i<N; i++){
+    double e = resid[i];
+    rss += e*e;
+  }
+   
+  // posterior shape
+  double shape_post = shape_prior + 0.5 * (double)N;
+  // posterior rate
+  double rate_post  = rate_prior + 0.5 * rss;
+
+  double scale_post = 1.0 / rate_post;
+  // gamma draw
+  double gamma_draw = R::rgamma(shape_post, scale_post);
+
+  
+  double sigma2_draw = 1.0 / gamma_draw;
+  return sigma2_draw;
+}
