@@ -663,6 +663,7 @@ List bcfoverparRcppClean(NumericVector y_, NumericVector z_, NumericVector w_,
         double r = (y[k] - allfit_con[k] - randeff_contrib)*bscale/allfit_mod[k];
 
         if(r!=r) {
+
           Rcout << "bscale " << k << " r " << r << " mscale " <<mscale<< " b*z " << allfit_mod[k]*z_[k] << " bscale " << bscale0 << " " <<bscale1 << endl;
           stop("");
         }
@@ -729,7 +730,7 @@ List bcfoverparRcppClean(NumericVector y_, NumericVector z_, NumericVector w_,
         Rcout << "Original pi_mod.tau : " <<  pi_mod.tau << "\n";
       }
 
-      pi_mod.tau   = mod_sd/(sqrt(delta_mod)*sqrt((double) ntree_mod));
+      pi_mod.tau   = mod_sd/(sqrt(delta_mod)*sqrt((double) ntree_mod)); // Not needed as we are doing a linear model now.
 
       if(verbose_itr){
         Rcout << "New pi_mod.tau : " <<  pi_mod.tau << "\n\n";
@@ -757,6 +758,7 @@ List bcfoverparRcppClean(NumericVector y_, NumericVector z_, NumericVector w_,
 
         double r = (y[k] - allfit_mod[k]- randeff_contrib)*mscale/allfit_con[k];
         if(r!=r) {
+          Rcout << "allfit_mod " << allfit_mod[k] << endl;
           Rcout << "mscale " << k << " r " << r << " mscale " <<mscale<< " b*z " << allfit_mod[k]*z_[k] << " bscale " << bscale0 << " " <<bscale1 << endl;
           stop("");
         }

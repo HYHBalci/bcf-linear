@@ -10,6 +10,7 @@ run_mcmc_univariate_horseshoe <- function(
     x,          # predictor vector (same length as y)
     n_iter = 2000, 
     burn   = 500,
+    thin = 10,
     # hyperparameters
     sigma_prior_nu   = 3.0,  # e.g. ~ InvGamma(nu/2, nu*lambda/2)
     sigma_prior_lambda = 1.0,
@@ -103,12 +104,13 @@ run_mcmc_univariate_horseshoe <- function(
   }
   
   # 5) Return posterior draws (minus burn-in)
-  keep <- seq(from = burn+1, to = n_iter)
+  keep_indices <- seq(from = burn + 1, to = n_iter, by = thin)
+  
   res <- list(
-    beta0 = out_beta0[keep],
-    beta  = out_beta[keep],
-    tau   = out_tau[keep],
-    sigma = out_sigma[keep]
+    beta0 = out_beta0[keep_indices],
+    beta  = out_beta[keep_indices],
+    tau   = out_tau[keep_indices],
+    sigma = out_sigma[keep_indices]
   )
   return(res)
 }
@@ -126,7 +128,7 @@ true_sigma <- 1.0
 y <- true_beta0 + true_beta*x + rnorm(N, 0, true_sigma)
 
 # Run MCMC
-res <- run_mcmc_univariate_horseshoe(y, x, n_iter=3000, burn=1000)
+res <- run_mcmc_univariate_horseshoe(y, x, n_iter=30000, burn=1000)
 
 cat("Posterior means:\n")
 cat("beta0 =", mean(res$beta0), "\n")
@@ -135,4 +137,5 @@ cat("tau   =", mean(res$tau),   "\n")
 cat("sigma =", mean(res$sigma), "\n")
 
 
-hist(res$beta)
+hist(res$tau)
+
