@@ -362,6 +362,14 @@ bcf_linear <- function(y, z, x_control, x_moderate=x_control, pihat, w = NULL,
                                        b_half_normal = TRUE, verbose_sigma=verbose, 
                                        no_output=no_output)
     
+    
+    chain_data <- fitbcf
+    
+    # Create a dynamic filename based on iChain
+    filename <- sprintf("chain_data_%d.RData", iChain)
+    
+    # Save the object to an RDS file
+    save(chain_data, file = filename)
     cat("bcfoverparRcppClean returned to R\n")
     
     ac = fitbcf$m_post[,order(perm)]
@@ -441,10 +449,17 @@ for (iChain in 1:n_chains) {
     verbose_sigma = verbose, 
     no_output = no_output
   )
+  
+  chain_data <- chain_out[[iChain]]
+  
+  # Create a dynamic filename based on iChain
+  filename <- sprintf("chain_data_%d.RData", iChain)
+  
+  # Save the object to an RDS file
+  save(chain_data, file = filename)
 }
 
   }
-  
   
   
   all_sigma = c()
@@ -457,7 +472,7 @@ for (iChain in 1:n_chains) {
   all_yhat = c()
   all_mu   = c()
   all_tau  = c()
-  
+  all_beta = c()
   chain_list=list()
   
   n_iter = length(chain_out[[1]]$sigma)
@@ -469,6 +484,8 @@ for (iChain in 1:n_chains) {
     
     b0               <- chain_out[[iChain]]$b0
     b1               <- chain_out[[iChain]]$b1
+    
+    beta <- chain_out[[iChain]]$Beta
     
     yhat             <- chain_out[[iChain]]$yhat
     tau              <- chain_out[[iChain]]$tau
@@ -488,6 +505,7 @@ for (iChain in 1:n_chains) {
     all_mu   = rbind(all_mu,   mu)
     all_tau  = rbind(all_tau,  tau)
     
+    all_beta = rbind(all_beta, t(beta))
     # -----------------------------    
     # Make the MCMC Object
     # -----------------------------
@@ -529,6 +547,7 @@ for (iChain in 1:n_chains) {
                  muy = chain_out[[1]]$muy,
                  mu  = all_mu,
                  tau = all_tau,
+                 beta = all_beta,
                  mu_scale = all_mu_scale,
                  tau_scale = all_tau_scale,
                  b0 = all_b0,

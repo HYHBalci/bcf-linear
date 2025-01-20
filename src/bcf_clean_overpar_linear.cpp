@@ -554,8 +554,9 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
       alpha = sample_alpha(n, r_alpha, sigma, alpha_prior_sd);
       
       for(int i = 0; i < n; i++){
-        allfit[i]     = allfit[i]     +alpha;
-        allfit_mod[i] = allfit_mod[i] +alpha;
+        double bscale = (i < ntrt) ? bscale1 : bscale0;
+        allfit[i]     = allfit[i]     +bscale*alpha;
+        allfit_mod[i] = allfit_mod[i] +bscale*alpha;
       }
       
       for(int j=0; j<p_mod; j++){

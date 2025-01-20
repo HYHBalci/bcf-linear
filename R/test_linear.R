@@ -52,7 +52,7 @@ bcf_out <- bcf_linear(y                = y,
                random_seed      = 1,
                update_interval  = 1, 
                no_output        = FALSE,
-               do_parallel = FALSE)
+               do_parallel = TRUE)
 
 
 summary(bcf_out)
