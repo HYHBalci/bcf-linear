@@ -34,8 +34,9 @@ static double log_p_tau(double tau, double beta_j, double sigma);
 
 double sample_alpha(
     int N,
-    NumericVector r_alpha,     // partial residual
-    double sigma,              // current residual sd
+    NumericVector r_alpha, // partial residual
+    NumericVector z_,      // treatment indicator
+    double sigma,
     double alpha_prior_sd = 10.0
 );
 

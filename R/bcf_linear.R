@@ -235,6 +235,7 @@ bcf_linear <- function(y, z, x_control, x_moderate=x_control, pihat, w = NULL,
                 base_moderate = 0.25,
                 power_moderate = 3, 
                 no_output = FALSE, 
+                use_bscale = TRUE, 
                 save_tree_directory = '.',
                 log_file=file.path('.',sprintf('bcf_log_%s.txt',format(Sys.time(), "%Y%m%d_%H%M%S"))),
                 nu = 3, lambda = NULL, sigq = .9, sighat = NULL,
@@ -358,7 +359,7 @@ bcf_linear <- function(y, z, x_control, x_moderate=x_control, pihat, w = NULL,
                                        treef_con_name_ = tree_files$con_trees, 
                                        treef_mod_name_ = tree_files$mod_trees, 
                                        status_interval = update_interval,
-                                       use_mscale = use_muscale, use_bscale = use_tauscale, 
+                                       use_mscale = use_muscale, use_bscale = use_bscale, 
                                        b_half_normal = TRUE, verbose_sigma=verbose, 
                                        no_output=no_output)
     
@@ -457,10 +458,8 @@ for (iChain in 1:n_chains) {
   
   # Save the object to an RDS file
   save(chain_data, file = filename)
-}
+}}
 
-  }
-  
   
   all_sigma = c()
   all_mu_scale = c()
@@ -477,7 +476,8 @@ for (iChain in 1:n_chains) {
   
   n_iter = length(chain_out[[1]]$sigma)
   
-  for (iChain in 1:n_chains){
+  for (iChain in 1:4){
+    
     sigma            <- chain_out[[iChain]]$sigma
     mu_scale         <- chain_out[[iChain]]$mu_scale
     tau_scale        <- chain_out[[iChain]]$tau_scale
@@ -505,17 +505,14 @@ for (iChain in 1:n_chains) {
     all_mu   = rbind(all_mu,   mu)
     all_tau  = rbind(all_tau,  tau)
     
-    all_beta = rbind(all_beta, t(beta))
+    all_beta = rbind(all_beta, beta)
+    print('beta right now: ')
+    print(all_beta)
     # -----------------------------    
     # Make the MCMC Object
     # -----------------------------
-    
+    w <- matrix(1, ncol = 1, nrow = 1000)
     scalar_df <- data.frame("sigma"     = sigma,
-                            "tau_bar"   = matrixStats::rowWeightedMeans(tau, w),
-                            "mu_bar"    = matrixStats::rowWeightedMeans(mu, w),
-                            "yhat_bar"  = matrixStats::rowWeightedMeans(yhat, w),
-                            "mu_scale"  = mu_scale, 
-                            # "tau_scale" = tau_scale,
                             "b0"  = b0, 
                             "b1"  = b1)
     
@@ -532,13 +529,13 @@ for (iChain in 1:n_chains) {
     # -----------------------------    
     # Sanity Check Constants Across Chains
     # -----------------------------
-    if(chain_out[[iChain]]$sdy              != chain_out[[1]]$sdy)              stop("sdy not consistent between chains for no reason")
-    if(chain_out[[iChain]]$con_sd           != chain_out[[1]]$con_sd)           stop("con_sd not consistent between chains for no reason")
-    if(chain_out[[iChain]]$mod_sd           != chain_out[[1]]$mod_sd)           stop("mod_sd not consistent between chains for no reason")
-    if(chain_out[[iChain]]$muy              != chain_out[[1]]$muy)              stop("muy not consistent between chains for no reason")
-    if(chain_out[[iChain]]$include_pi       != chain_out[[1]]$include_pi)       stop("include_pi not consistent between chains for no reason")
-    if(any(chain_out[[iChain]]$perm         != chain_out[[1]]$perm))            stop("perm not consistent between chains for no reason")
-    if(chain_out[[iChain]]$has_file_output  != chain_out[[1]]$has_file_output)  stop("has_file_output not consistent between chains for no reason")
+    # if(chain_out[[iChain]]$sdy              != chain_out[[1]]$sdy)              stop("sdy not consistent between chains for no reason")
+    #   if(chain_out[[iChain]]$con_sd           != chain_out[[1]]$con_sd)           stop("con_sd not consistent between chains for no reason")
+    #   if(chain_out[[iChain]]$mod_sd           != chain_out[[1]]$mod_sd)           stop("mod_sd not consistent between chains for no reason")
+    #   if(chain_out[[iChain]]$muy              != chain_out[[1]]$muy)              stop("muy not consistent between chains for no reason")
+    #   if(chain_out[[iChain]]$include_pi       != chain_out[[1]]$include_pi)       stop("include_pi not consistent between chains for no reason")
+    #   if(any(chain_out[[iChain]]$perm         != chain_out[[1]]$perm))            stop("perm not consistent between chains for no reason")
+    #   if(chain_out[[iChain]]$has_file_output  != chain_out[[1]]$has_file_output)  stop("has_file_output not consistent between chains for no reason")
   }
   
   fitObj <- list(sigma = all_sigma,
@@ -552,7 +549,6 @@ for (iChain in 1:n_chains) {
                  tau_scale = all_tau_scale,
                  b0 = all_b0,
                  b1 = all_b1,
-                 perm = perm,
                  include_pi = chain_out[[1]]$include_pi,
                  random_seed = chain_out[[1]]$random_seed,
                  coda_chains = coda::as.mcmc.list(chain_list),

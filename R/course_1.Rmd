@@ -1,0 +1,267 @@
+---
+title: "Causal Inference and Propensity Score Methods"
+author: "Thomas Klausch"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Required Packages
+
+```{r}
+library(ggplot2)
+library(cobalt)
+library(marginaleffects)
+library(sandwich)
+library(lmtest)
+```
+
+## 1. Regression Estimation in R (Parametric G-Formula)
+
+### (a) Load the data and estimate the associational risk difference and the risk ratio between participants with a high cholesterol and a normal cholesterol on death. Having a high cholesterol level is encoded in the variable `Cholesterol_dicho` (0: normal; 1: high). Obtain a p-value using a Chi-square test, which is available in function `prop.test`.
+
+```{r}
+load('nhefs_prepared.rdata ')
+head(dat)
+summary(dat)
+```
+
+```{r}
+tab <- xtabs(~ death + Cholesterol_dicho, data=dat)
+prop.test(tab[2,], colSums(tab))
+tab
+```
+
+### (b) Calculate the associational odds ratio. First use the counts in the `tab` table to obtain it, then use a logistic regression with the `glm` function.
+
+```{r}
+mod <- glm(death ~ Cholesterol_dicho, data = dat, family=binomial)
+summary(mod)
+```
+
+### As a next step, we estimate the causal risk difference and risk ratio by regression estimation. This technique uses the so-called parametric g-formula, and you sometimes find the one or the other term used in practice. In this assign-ment, we will assume that it is sufficient to include the following covariates to invoke conditional exchangeability: active, alcoholfreq, asthma, bronch, exercise, income, race, sex, bmi, age. As introduced in the lecture of today, we use two outcome models to estimate the causal effect: one outcome model for participants with high cholesterol and one outcome model for participants with normal cholesterol.
+
+```{r}
+# Define the linear additive model with main effects
+mod.eq = death ~ active + alcoholfreq + asthma + bronch + exercise + income + race + sex + bmi + age
+# Estimate outcome models
+mod0 = glm(mod.eq , data = dat , family = binomial (), subset = Cholesterol_dicho == 0)
+mod1 = glm(mod.eq , data = dat , family = binomial (), subset = Cholesterol_dicho == 1)
+```
+
+### (c) Why do we use logistic regression models to model the outcome?
+
+### (d) Using regression estimation, estimate the probability of death if the whole population had low cholesterol, Pr(Y(a=0) = 1), and the probability of death if the whole population had high cholesterol Pr(Y(a=1) = 1). Then calculate the ACE, defined by Pr(Y(a=1) = 1)− Pr(Y(a=0) = 1).
+
+```{r}
+p0 <- predict(mod0, newdata = dat, type = "response")
+p1 <- predict(mod1, newdata = dat, type = "response")
+
+```
+
+### (e) It is also possible to estimate the ACE (risk difference) using a single model where treatment is added as a covariate.
+
+```{r}
+mod.eq.ancova <- death ~ Cholesterol_dicho + active + alcoholfreq + asthma + bronch + exercise + income + race + sex + bmi + age
+mod.ancova <- glm(mod.eq.ancova, data = dat, family=binomial())
+avg_comparisons(mod.ancova, variables = "Cholesterol_dicho", newdata = dat, comparison = 'difference')
+```
+
+### (f) Modify `mod.eq.ancova` such that we obtain the same estimate as the one in sub-question (d).
+
+### (g) Using one of the models fitted in sub-questions (e) or (f), obtain the causal risk difference by hard-coding instead of using `avg_comparisons`.
+
+```{r}
+dat0 <- dat
+dat1 <- dat
+dat0$Cholesterol_dicho <- 0
+dat1$Cholesterol_dicho <- 1
+p0 <- predict(..., newdata = ..., type = ...)
+
+```
+
+### (h) Use `avg_comparisons` to estimate the causal odds ratio from `mod.ancova` fitted in sub-question (e) . Hint: you need to work on arguments comparison and transform.
+
+```{r}
+
+```
+
+### (i) Bootstrap the regression estimate of the risk difference to obtain an estimate of its standard error and a confidence interval.
+
+```{r}
+boot <- 1000
+rd <- numeric(boot)
+for(i in 1:boot){
+  dat.boot <- dat[sample(1:nrow(dat), nrow(dat), replace = TRUE),]
+  # [Add the missing code here , i.e. do the estimation]
+  rd[i] <- mean(p1.boot - p0.boot)
+}
+mean(rd) #estimate
+sqrt(var(rd)) #se
+quantile(rd, c(0.025, 0.975)) #CI
+```
+
+## 2. Overlap, Balance and the IPW Estimator
+
+```{r}
+load('C:/Users/P094412/Documents/bcf-linear/nhefs_prepared.rdata')
+
+```
+
+### (a) Load the data again and inspect univariate covariate overlap.
+
+```{r}
+xtabs( ~active + Cholesterol_dicho , data = dat)
+xtabs( ~asthma + Cholesterol_dicho , data = dat)
+xtabs( ~bronch + Cholesterol_dicho , data = dat)
+xtabs( ~exercise + Cholesterol_dicho , data = dat)
+xtabs( ~income + Cholesterol_dicho , data = dat)
+xtabs( ~race + Cholesterol_dicho , data = dat)
+xtabs( ~sex + Cholesterol_dicho , data = dat)
+xtabs( ~age + Cholesterol_dicho , data = dat)
+```
+
+### (b) Inspect univariate covariate overlap for the continuous covariate BMI using a histogram plot.
+
+```{r}
+ggplot(dat, aes(x = bmi, fill = as.factor(Cholesterol_dicho))) +
+  geom_histogram(alpha=0.4, position='identity', bins=30) +
+  coord_cartesian(xlim=c(0, 60)) + labs(fill='Group')
+
+nrow(dat)
+dat = dat[dat$bmi < 50,]
+nrow(dat)
+
+```
+
+### (c) Inspect covariate balance before adjustment using the `bal.tab` function.
+
+```{r}
+bal.tab(Cholesterol_dicho ~ active + alcoholfreq + asthma + bronch + exercise + income + race + sex + bmi + age, data = dat, stats = c('mean.diff','variance.ratios'), continuous = 'std', binary = 'std', s.d.denom = 'pooled')
+```
+
+### (d) We now specify and estimate a propensity score model (step 3). We will use the ’standard’ approach which models the treatment by a logistic regression with all confounders included as main effects. Specify the model using a glm. Which terms are significant predictors of having high cholesterol (on level α = .05)?
+
+```{r}
+ps.mod <- glm(Cholesterol_dicho ~ active + alcoholfreq + asthma + bronch + exercise + income + race + sex + bmi + age, data = dat, family = binomial)
+summary(ps.mod)
+```
+
+### (e) 
+
+```{r}
+# Predict propensity scores from the model
+dat$ps = predict(ps.mod , newdata = dat , type = 'response')
+# Calculate linearized propensity scores by the logit tramnsformation
+dat$lps = log(dat$ps/(1- dat$ps))
+# Make overlap plots
+ggplot (dat , aes(x = ps , fill = Cholesterol_dicho_factor ) ) +
+geom_histogram (alpha =0.4 , position ="identity", bins =30) +
+coord_cartesian (xlim=c(0, 1)) + labs(fill='Group')
+ggplot (dat , aes(x = lps , fill = Cholesterol_dicho_factor ) ) +
+geom_histogram (alpha =0.4 , position ="identity", bins =30) +
+coord_cartesian (xlim=c(-3, 3)) + labs(fill='Group')
+sum(dat$ps > .9 | dat$ps < .1)
+
+```
+
+### (f) Estimate the causal effect using IPW.
+
+```{r}
+# Solution
+dat = dat[!(dat$ps > .9 | dat$ps < .1), ]
+ps.mod = glm(Cholesterol_dicho ~ active + alcoholfreq + asthma + bronch
++ exercise + income + race + sex + bmi + age,
+data = dat, family = binomial)
+dat$ps = predict(ps.mod, newdata = dat, type = 'response')
+dat$lps = log(dat$ps/(1-dat$ps))
+ggplot(dat, aes(x = ps, fill = Cholesterol_dicho_factor ) ) +
+geom_histogram(alpha=0.4, position="identity", bins=30) +
+coord_cartesian(xlim=c(0, 1)) + labs(fill='Group')
+ggplot(dat, aes(x = lps, fill = Cholesterol_dicho_factor ) ) +
+geom_histogram(alpha=0.4, position="identity", bins=30) +
+coord_cartesian(xlim=c(-3, 3)) + labs(fill='Group')
+
+```
+
+### (g) Now we will create the inverse propensity score weights. Remember that the correct weights are given by the To assign all subjects the correct weight use the ifelse function and complete the code below. Then assess whether there are any extreme weights (wi > 10).
+
+
+```{r}
+dat$w = ifelse(dat$Cholesterol_dicho==1, 1/dat$ps, 1/(1-dat$ps))
+summary(dat$w)
+
+
+```
+### (h) Now you will re-evaluate covariate balance after weighting the distribution by the IPW weights (step 6). Covariate balance evaluation is the main indicator for the success of propensity score analyses. Hopefully, the weighting procedure was successful and imbalance in covariates has been removed. Use again the bal.tab function from the cobalt package and evaluate the adjusted standardized mean difference and variance ratios with the same criteria as in (c). Did balance improve? Hint: use the same bal.tab as in (c) and add/modify the weights and un arguments.
+```{r}
+bal.tab(Cholesterol_dicho ~ active + alcoholfreq + asthma + bronch + exercise + income
++ race + sex + bmi + age,
+data = dat, stats = c('mean.diff','variance.ratios'),
+continuous = 'std', binary = 'std',
+s.d.denom = 'pooled', weights = dat$w, un= T)
+
+```
+### (i) Repeat the steps in (g) and (h) to assess balance after adjustment using the propensity scores estimated by model ps.mod2. Do we now have satisfactory balance on all criteria?
+.
+```{r}
+ps.mod2 = glm( Cholesterol_dicho ~ active + alcoholfreq + asthma + bronch
++ exercise + income + race + sex
++ poly(age , degree =2) + poly(bmi , degree = 2),
+data = dat , family = binomial )
+summary (ps.mod2)
+dat$ps = predict (ps.mod2 , newdata = dat , type = 'response')
+
+dat$w = ifelse(dat$Cholesterol_dicho==1, 1/dat$ps, 1/(1-dat$ps))
+bal.tab(Cholesterol_dicho ~ active + alcoholfreq + asthma + bronch + exercise + income + race + sex + bmi + age, data = dat, stats = c('mean.diff','variance.ratios'),
+continuous = 'std', binary = 'std', s.d.denom = 'pooled', weights = dat$w, un= T)
+
+```
+### (j) Now it is time to plot a love plot. Below is a basic structure to obtain this plot from a bal.tab object. Add the arguments abs and var.order to obtain a plot where the variables are ordered by the unadjusted absolute mean difference. Note that you have to first define the object b as the bal.tab from sub-question (i).
+```{r}
+b = bal.tab(Cholesterol_dicho ~ active + alcoholfreq + asthma + bronch
++ exercise + income + race + sex
++ bmi + age,
+data = dat, stats = c('mean.diff','variance.ratios'),
+continuous = 'std', binary = 'std', s.d.denom = 'pooled',
+weights = dat$w, un= T)
+love.plot(b, stats = 'mean.diff', threshold = c(m = .1),
+abs = T, var.order = "unadjusted",)
+```
+### (k) Calculate the IPW causal odds ratio and its 95% confidence interval. Use 1.965 as critical value.
+```{r}
+mod.glm = glm(death ~ Cholesterol_dicho , data = dat , weights = w, family = binomial)
+coef = coeftest(mod.glm, vcov. = vcovHC)
+exp(coef[2,1])
+exp(c(coef[2,1] - 1.965 * coef[2,2],coef[2,1] + 1.965 * coef[2,2]))
+
+coef
+```
+### (m)
+
+```{r}
+ipw = function(A, Y, w){
+m1 = sum( Y * w * A) /sum(w*A)
+m0 = sum( Y * w * (1-A)) /sum(w*(1-A))
+c(m0, m1, m1-m0, m1/m0, (m1/(1-m1))/(m0/(1-m0)))}
+ipw(A = dat$Cholesterol_dicho, Y = dat$death, w= dat$w)
+
+```
+### (n)
+
+```{r}
+# Solution
+set.seed (2024)
+boot = 1e3
+HTest = matrix (ncol = 5, nrow = boot)
+for(i in 1: boot){
+dat.boot = dat[ sample (1: nrow(dat), nrow(dat), replace = T) ,]
+ps.mod2 = glm( Cholesterol_dicho ~ active + alcoholfreq + asthma + bronch
++ exercise + income + race + sex
++ poly(age , degree =2) + poly(bmi , degree = 2),
+data = dat , family = binomial )
+dat.boot$w = ifelse(dat.boot$ Cholesterol_dicho ==1, 1/dat.boot$ps , 1/(1- dat.boot$ps))
+HTest[i,] = ipw(A = dat.boot$ Cholesterol_dicho , Y = dat.boot$death , w= dat.boot$w )
+}
+apply(HTest, 2, mean)
+
+```

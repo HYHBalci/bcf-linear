@@ -1,0 +1,274 @@
+------------------------------------------------------------------------
+
+``` yaml
+---
+title: "Nearest Neighbor Propensity Score Matching with MatchIt"
+author: "Your Name"
+date: "2025-01-26"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+---
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      message = FALSE, 
+                      warning = FALSE)
+```
+
+# Propensity Score Matching with **MatchIt**
+
+> **Research Question**:\
+> What is the causal effect between smokers with a *high cholesterol* level and smokers with a *normal cholesterol* level on death by 1992?
+
+```{r}
+load("C:/Users/P094412/Documents/bcf-linear/nhefs_prepared_day2.rdata")
+```
+
+## (a) Interpretation of ACET
+
+```{r a-interpretation, eval=FALSE}
+# Interpretation:
+# The ACET is the average effect for those with high cholesterol, 
+# interpreted as how their risk of death would change if they had normal cholesterol instead.
+```
+
+## (b) 1:1 Nearest Neighbor Matching *without replacement*
+
+```{r b-match-no-replace}
+# If needed, install MatchIt:
+# install.packages("MatchIt")
+
+library(MatchIt)
+
+# Define the propensity score formula
+eq_psmod <- Cholesterol_dicho ~ active + alcoholfreq + asthma + bronch + 
+  exercise + income + race + sex + bmi + age
+
+# Perform 1:1 nearest neighbor matching without replacement
+match_no_replace <- matchit(formula = eq_psmod,
+                            data = dat, 
+                            method = "nearest",
+                            distance = "glm")
+
+# Check how many unmatched
+summary(match_no_replace)$nn
+```
+
+## (c) Properties of the Matching Model
+
+```{r c-model-props, eval=FALSE}
+# This is 1:1 NN matching in descending order of PS, without replacement, no caliper.
+```
+
+## (d) Model Used Internally
+
+```{r d-internal-model, eval=FALSE}
+# matchit(distance = "glm") -> uses a logistic regression on all covariates in eq_psmod.
+```
+
+## (e) Estimate PS Externally and Pass to `matchit`
+
+```{r e-external-ps}
+# Fit the logistic regression externally
+ps.mod <- glm(eq_psmod, data = dat, family = binomial)
+
+# Get propensity score
+dat$ps <- predict(ps.mod, newdata = dat, type = "response")
+
+# Perform matching by passing the pre-computed distance
+match_external_ps <- matchit(formula = eq_psmod,
+                             data = dat,
+                             method = "nearest",
+                             distance = dat$ps)
+
+summary(match_external_ps)$nn
+```
+
+## (f) Balance Check on Matched Sample
+
+```{r f-balance-check}
+# Quick check of balance
+plot(summary(match_no_replace))
+```
+
+> Because only 18 (or so) treated units are unmatched, balance may not improve much.
+
+## (g) Improving Balance with a Caliper (0.2 and 0.05)
+
+```{r g-calipers}
+match_cal20 <- matchit(eq_psmod, data = dat,
+                       method = "nearest",
+                       distance = "glm",
+                       caliper = 0.2)
+match_cal05 <- matchit(eq_psmod, data = dat,
+                       method = "nearest",
+                       distance = "glm",
+                       caliper = 0.05)
+
+# Number of matched
+summary(match_cal20)$nn
+summary(match_cal05)$nn
+```
+
+## (h) 1:1 Matching -\> Equal \# Treated and Controls
+
+```{r h-one-one, eval=FALSE}
+# Because ratio = 1 by default in matchit, we get the same # matched in T and C.
+```
+
+## (i) Fewer Matches with Smaller Caliper
+
+```{r i-explanation, eval=FALSE}
+# A stricter (smaller) caliper excludes more treated who don't find a close control match.
+```
+
+## (j) Love Plots via **cobalt**
+
+```{r j-love-plots, eval=FALSE}
+# install.packages("cobalt") if needed
+library(cobalt)
+
+love.plot(match_cal20, 
+          stats = "mean.diffs", 
+          abs = TRUE,
+          var.order = "unadjusted",
+          threshold = 0.1)
+
+love.plot(match_cal05, 
+          stats = "mean.diffs", 
+          abs = TRUE,
+          var.order = "unadjusted",
+          threshold = 0.1)
+```
+
+## (k) Consequences of Excluding Unmatched Treated
+
+```{r k-exclusion, eval=FALSE}
+# We no longer estimate ACET for all treated, only those who found a match.
+# This can reduce external validity if many are excluded.
+```
+
+## (l) Check Caliper Values
+
+```{r l-check-caliper}
+match_cal20$caliper
+match_cal05$caliper
+
+sd(match_cal20$distance) * 0.2
+sd(match_cal05$distance) * 0.05
+```
+
+## (m) Inspecting Variance Ratios
+
+```{r m-variance-ratios, eval=FALSE}
+summary(match_cal20)   # shows var. ratio, SMD, etc.
+```
+
+## (n) Matching with Replacement
+
+```{r n-with-replacement}
+match_cal20r <- matchit(eq_psmod, data = dat,
+                        method = "nearest",
+                        distance = "glm",
+                        caliper = 0.2,
+                        replace = TRUE)
+
+match_cal05r <- matchit(eq_psmod, data = dat,
+                        method = "nearest",
+                        distance = "glm",
+                        caliper = 0.05,
+                        replace = TRUE)
+
+summary(match_cal20r)$nn
+summary(match_cal05r)$nn
+```
+
+## (o) More Treated Units Matched
+
+```{r o-advantage, eval=FALSE}
+# Because with replacement, we can re-use the same control multiple times 
+# and thus keep most/all treated matched.
+```
+
+## (p) Fewer Unique Controls
+
+```{r p-why-fewer-controls, eval=FALSE}
+# The best (closest) controls get matched repeatedly.
+```
+
+## (q) Adding Quadratic Terms to Fix Variance Ratios
+
+```{r q-bmi-age2}
+eq_psmod2 <- Cholesterol_dicho ~ active + alcoholfreq + asthma + bronch + exercise +
+  income + race + sex + poly(age, 2) + poly(bmi, 2)
+
+match_cal20r_v2 <- matchit(eq_psmod2, data = dat,
+                           method = "nearest",
+                           distance = "glm",
+                           caliper = 0.2,
+                           replace = TRUE)
+
+summary(match_cal20r_v2)
+```
+
+## (r) Jitter Plot Without Replacement
+
+```{r r-jitter-plot-norep, eval=FALSE}
+plot(match_cal20, type = "jitter", interactive = FALSE)
+```
+
+## (s) Jitter Plot With Replacement
+
+```{r s-jitter-plot-rep, eval=FALSE}
+plot(match_cal20r, type = "jitter", interactive = FALSE)
+```
+
+## (t) Extract Matched Data (`get_matches`) -\> All Weights = 1
+
+```{r t-get-matches}
+dat_matched <- get_matches(match_cal20r)
+head(dat_matched)
+table(dat_matched$weights)
+```
+
+## (u) How Often is the Same Control Matched?
+
+```{r u-control-usage}
+table(table(subset(dat_matched, Cholesterol_dicho == 0)$id))
+```
+
+## Estimate the Causal (Log) Odds Ratio
+
+```{r final-estimation}
+# For cluster-robust SE:
+library(lmtest)
+library(sandwich)
+
+mod <- glm(death ~ Cholesterol_dicho,
+           data = dat_matched,
+           family = binomial)
+
+# Adjust SE for clustering by subclass + id
+coeftest(mod, vcov. = vcovCL, cluster = ~ subclass + id)
+```
+
+> This gives us a **cluster-robust** standard error, accounting for matched sets and repeated usage of some controls.
+
+------------------------------------------------------------------------
+
+**End of R Markdown**
+
+**Instructions**:
+
+1.  Copy all of the text above (the YAML header, code, and text) into a file named something like `matching_tutorial.Rmd`.
+2.  Open it in RStudio (or any other environment that supports R Markdown).
+3.  Click **Knit** to produce an HTML document.
+    -   Make sure you have the necessary libraries installed:
+
+        ``` r
+        install.packages(c("MatchIt", "cobalt", "lmtest", "sandwich"))
+        ```
+4.  Follow the rendered document to see the code output and explanations.

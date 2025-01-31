@@ -12,130 +12,131 @@ run_mcmc_univariate_horseshoe <- function(
     burn   = 500,
     thin = 10,
     # hyperparameters
-    sigma_prior_nu   = 3.0,  # e.g. ~ InvGamma(nu/2, nu*lambda/2)
-    sigma_prior_lambda = 1.0,
-    beta0_prior_sd   = 10.0  # for intercept ~ N(0, beta0_prior_sd^2)
+    # Priors for intercept
+    alpha_prior_sd = 10.0,
+    # Inverse-Gamma prior for sigma^2
+    sigma2_prior_shape = 1.0,
+    sigma2_prior_rate  = 0.001,
+    # Slice sampler settings for tau
+    step_out = 0.5,
+    max_steps = 50
 ) {
   # 0) Basic checks
   N <- length(y)
-  if(length(x) != N) stop("x and y must have the same length")
-  
+
   # 1) Storage
   # We'll store draws for (beta0, beta, tau, sigma)
-  out_beta0 <- numeric(n_iter)
-  out_beta  <- numeric(n_iter)
-  out_tau   <- numeric(n_iter)
+  out_alpha <- numeric(n_iter)
+  out_beta  <- matrix(0, nrow = n_iter, ncol = p)
+  out_tau   <- matrix(0, nrow = n_iter, ncol = p)
+  out_lambda <- matrix(1.0, nrow = n_iter, ncol = p)
   out_sigma <- numeric(n_iter)
   
   # 2) Initialize parameters
-  beta0 <- 0.0
-  beta  <- 0.0
-  tau   <- 1.0
-  sigma <- 1.0
+  alpha <- 0.0
+  beta  <- rep(0.0, p) # Local shrinkage for each beta
+  tau   <- rep(1.0, p)           # Global shrinkage
+  sigma <- 1.0           # Noise standard deviation
   
-  # 3) The main MCMC loop
-  for(iter in seq_len(n_iter)) {
+  # 3) MCMC Loop
+  for (iter in seq_len(n_iter)) {
+    # -------------------------------------------
+    # (A) Update alpha (intercept)
+    # Residual excluding alpha
+    r_alpha <- y - (X %*% beta)
     
-    # --- (A) Update beta0 (intercept) ----------------------------------
-    # Model: y_i = beta0 + beta*x_i + e_i,  e_i ~ N(0, sigma^2).
-    # If we consider partial residuals wrt beta*x_i, i.e.:
-    #    r_i = y_i - beta*x_i,
-    # We have r_i ~ Normal(beta0, sigma^2).
-    # With prior beta0 ~ N(0, beta0_prior_sd^2),
-    # the posterior is also normal (conjugate).
-    #
-    # posterior variance = 1 / (n/sigma^2 + 1/beta0_prior_var)
-    # posterior mean    = var * ( (sum(r_i)/sigma^2) )
-    r_i <- y - beta*x  # partial residual for intercept
-    prior_var0 <- beta0_prior_sd^2
-    prec_data  <- N / (sigma^2)
-    prec_prior <- 1.0 / prior_var0
-    postVar0   <- 1.0 / (prec_data + prec_prior)
-    postMean0  <- postVar0 * (sum(r_i) / (sigma^2))
-    beta0 <- rnorm(1, mean = postMean0, sd = sqrt(postVar0))
-    
-    # --- (B) Update beta (slope) via sample_beta_j ---------------------
-    # We'll treat beta as if we have "z[i] = 1" for all i (like the "treatment" is always 1),
-    # and w_j[i] = (x[i]), then partial residual is: r_beta[i] = y[i] - beta0.
-    # So r_beta[i] ~ z[i]*w_j[i]*beta + e_i with prior beta ~ Normal(0, sigma^2 tau^2).
-    r_beta <- y - beta0  # partial residual ignoring beta's contribution
-    # We'll create dummy "z" (all 1) and "w_j" (the x vector)
-    z_vec  <- rep(1.0, N)
-    w_j    <- x
-    # call the Rcpp function sample_beta_j
-    beta_new <- sample_beta_j(
-      N         = N, 
-      r_beta    = r_beta, 
-      z         = z_vec, 
-      w_j       = w_j,
-      tau_j     = tau, 
-      sigma     = sigma
+    alpha <- sample_alpha(
+      N          = N,
+      r_alpha    = r_alpha,
+      sigma      = sigma,
+      alpha_prior_sd = alpha_prior_sd
     )
-    beta <- beta_new
     
-    # --- (C) Update tau (local scale) via slice sampler ---------------
-    # We call sample_tau_j_slice(tau_old, beta, sigma)
-    tau_new <- sample_tau_j_slice(
-      tau_old = tau, 
-      beta_j  = beta, 
-      sigma   = sigma
+    # -------------------------------------------
+    # (B) Update each beta_j
+    for (j in seq_len(p)) {
+      # Partial residual excluding beta_j contribution
+      r_beta <- y - alpha - X[, -j, drop=FALSE] %*% beta[-j]
+      
+      # Sample beta_j using Rcpp function
+      beta[j] <- sample_beta_j(
+        N        = N,
+        r_beta   = r_beta,
+        z        = rep(1.0, N),  # Set all z to 1 for continuous predictors
+        w_j      = X[, j],
+        tau_j    = tau[j],  # Local-global shrinkage
+        sigma    = sigma
+      )
+      
+      # -------------------------------------------
+      
+    # -------------------------------------------
+    # (D) Update global scale tau
+    tau[j] <- sample_tau_j_slice(
+      tau_old = tau[j],
+      beta_j  = beta[j],
+      sigma   = sigma,
+      step_out = step_out,
+      max_steps = max_steps
     )
-    tau <- tau_new
+    }
+    # -------------------------------------------
+    # (E) Update sigma^2 (error variance)
+    resid <- y - (alpha + X %*% beta)
+    sigma2 <- sample_sigma2_ig(
+      N           = N,
+      resid       = resid,
+      shape_prior = sigma2_prior_shape,
+      rate_prior  = sigma2_prior_rate
+    )
+    sigma <- sqrt(sigma2)
     
-    # --- (D) Update sigma^2 via Inverse-Gamma (conjugate) -------------
-    # residual e_i = y[i] - [beta0 + beta*x[i]]
-    e <- y - (beta0 + beta*x)
-    rss <- sum(e^2)
-    # prior: sigma^2 ~ InvGamma(nu/2, nu*lambda/2)
-    # posterior shape = (nu + N)/2
-    # posterior rate  = (nu*lambda + rss)/2
-    shape_post <- 0.5 * (sigma_prior_nu + N)
-    rate_post  <- 0.5 * (sigma_prior_nu*sigma_prior_lambda + rss)
-    # sample: sigma^2 from IG(shape, rate)
-    # in R: 1 / rgamma(1, shape, rate=...)
-    sigma2_new <- 1 / rgamma(1, shape = shape_post, rate = rate_post)
-    sigma <- sqrt(sigma2_new)
-    
-    # 4) Store draws
-    out_beta0[iter] <- beta0
-    out_beta[iter]  <- beta
-    out_tau[iter]   <- tau
-    out_sigma[iter] <- sigma
-  }
+    # -------------------------------------------
+    # Store results
+    out_alpha[iter] <- alpha
+    out_beta[iter, ] <- beta
+    out_tau[iter, ]  <- tau
+    out_sigma[iter] <- sigma}
   
-  # 5) Return posterior draws (minus burn-in)
+  # 4) Return posterior draws after burn-in and thinning
   keep_indices <- seq(from = burn + 1, to = n_iter, by = thin)
   
-  res <- list(
-    beta0 = out_beta0[keep_indices],
-    beta  = out_beta[keep_indices],
-    tau   = out_tau[keep_indices],
-    sigma = out_sigma[keep_indices]
-  )
-  return(res)
+  return (list(
+    alpha  = out_alpha[keep_indices],
+    beta   = out_beta[keep_indices, , drop = FALSE],
+    lambda = out_lambda[keep_indices, , drop = FALSE],
+    tau    = out_tau[keep_indices],
+    sigma  = out_sigma[keep_indices]
+  ))
 }
 
 # =======================================================================
 # Example usage:
 # =======================================================================
+# Set up the simulation
 set.seed(123)
-# Generate synthetic data: y = 1 + 2*x + e
-N <- 10000
-x <- rnorm(N, 0, 1)
+N <- 200
+
 true_beta0 <- 1.0
-true_beta  <- 2.0
+true_beta  <- c(2.0, 3.0, 0.0, -1, 0, 0, 4, 0)
+p <- length(true_beta)
+
+# Generate predictor matrix X
+X <- matrix(rnorm(N * p, mean = 0, sd = 1), nrow = N, ncol = p)
+
+# Generate the response variable y
 true_sigma <- 1.0
-y <- true_beta0 + true_beta*x + rnorm(N, 0, true_sigma)
+y <- true_beta0 + X %*% true_beta + rnorm(N, 0, true_sigma)
 
 # Run MCMC
-res <- run_mcmc_univariate_horseshoe(y, x, n_iter=30000, burn=1000)
+res <- run_mcmc_univariate_horseshoe(y, X, n_iter = 50000, burn = 1000)
 
-cat("Posterior means:\n")
-cat("beta0 =", mean(res$beta0), "\n")
-cat("beta  =", mean(res$beta),  "\n")
-cat("tau   =", mean(res$tau),   "\n")
-cat("sigma =", mean(res$sigma), "\n")
+# Display results
+cat("Posterior mean of alpha:", mean(res$alpha), "\n")
+cat("Posterior mean of beta:\n")
+print(colMeans(res$beta))
+cat("Posterior mean of tau:", mean(res$tau), "\n")
+cat("Posterior mean of sigma:", mean(res$sigma), "\n")
 
-
-hist(res$tau)
-
+# Visualize results
+hist(res$beta[,4], main = "Posterior distribution of sigma", xlab = "sigma")

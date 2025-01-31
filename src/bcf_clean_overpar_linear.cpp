@@ -28,7 +28,7 @@ using namespace Rcpp;
 //data should come in sorted with all trt first, then control cases
 
 //Tu ne cede malis, sed contra audentior ito!
-
+//The boolean Tian indicates whether we follow the notation set up by (Tian et al., 2016), this is a test setting to see if the linear function holds. 
 // [[Rcpp::export]]
 List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector w_,
                          NumericVector x_con_, NumericVector x_mod_,
@@ -46,8 +46,8 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
                          CharacterVector treef_con_name_, CharacterVector treef_mod_name_,
                          int status_interval=100,
                          bool RJ= false, bool use_mscale=true, bool use_bscale=true, bool b_half_normal=true,
-                         double trt_init = 1.0, bool verbose_sigma=false, 
-                         bool no_output=false)
+                         double trt_init = 0.0, bool verbose_sigma=false, 
+                         bool no_output=false, bool Tian = false)
 {
   
   bool randeff = true;
@@ -101,8 +101,8 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
   logger.log("");
    
   /*****************************************************************************
-  /* Read, format y
-    *****************************************************************************/
+  * Read, format y
+  *****************************************************************************/
    std::vector<double> y; //storage for y
    double miny = INFINITY, maxy = -INFINITY;
    sinfo allys;       //sufficient stats for all of y, use to initialize the bart trees.
@@ -157,8 +157,8 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
     }
     
     /*****************************************************************************
-     /* Read, format X_mod
-      *****************************************************************************/
+      Read, format X_mod
+    *****************************************************************************/
      int ntrt = 0;
     for(size_t i=0; i<n; ++i) {
       if(z_[i]>0) ntrt += 1;
@@ -172,17 +172,17 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
     Rcout << "Using " << p_mod << " potential effect moderators." << std::endl;
     
     //x cutpoints
-    xinfo xi_mod;
-    
-    xi_mod.resize(p_mod);
-    for(int i=0; i<p_mod; ++i) {
-      NumericVector tmp = x_mod_info_list[i];
-      std::vector<double> tmp2;
-      for(size_t j=0; j<tmp.size(); ++j) {
-        tmp2.push_back(tmp[j]);
-      }
-      xi_mod[i] = tmp2;
-    }
+    // xinfo xi_mod;
+    // 
+    // xi_mod.resize(p_mod);
+    // for(int i=0; i<p_mod; ++i) {
+    //   NumericVector tmp = x_mod_info_list[i];
+    //   std::vector<double> tmp2;
+    //   for(size_t j=0; j<tmp.size(); ++j) {
+    //     tmp2.push_back(tmp[j]);
+    //   }
+    //   xi_mod[i] = tmp2;
+    // }
     
     //  Rcout <<"\nburn,nd,number of trees: " << burn << ", " << nd << ", " << m << endl;
     //  Rcout <<"\nlambda,nu,kfac: " << lambda << ", " << nu << ", " << kfac << endl;
@@ -191,10 +191,10 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
     /* Setup the model
     *****************************************************************************/
      //--------------------------------------------------
-     //trees
+    // trees
      std::vector<tree> t_mod(ntree_mod);
     for(size_t i=0;i<ntree_mod;i++) t_mod[i].setm(trt_init/(double)ntree_mod);
-    
+
     std::vector<tree> t_con(ntree_con);
     for(size_t i=0;i<ntree_con;i++) t_con[i].setm(ybar/(double)ntree_con);
     
@@ -252,7 +252,7 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
     //--------------------------------------------------
     //dinfo for trt effect function b(x)
     double* allfit_mod = new double[n]; //sum of fit of all trees
-    for(size_t i=0;i<n;i++) allfit_mod[i] = (z_[i]*bscale1 + (1-z_[i])*bscale0)*trt_init;
+    for(size_t i=0;i<n;i++) allfit_mod[i] = trt_init;
     double* r_mod = new double[n]; //y-(allfit-ftemp) = y-allfit+ftemp
     dinfo di_mod;
     di_mod.n=n;
@@ -540,48 +540,46 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
       // Treatment Effect; Model this in a linear way drawing inspiration from 'Think Before you shrink'
       
       for(int i=0; i<n; i++){
-        double sumBX = 0.0;
-        for(int j=0; j<p_mod; j++){
-          sumBX += beta[j]*di_mod.x[i*di_mod.p + j];
-        }
-        double bscale = (i < ntrt) ? bscale1 : bscale0;
-        allfit[i]     = allfit[i]     -bscale*alpha;
-        allfit_mod[i] = allfit_mod[i] -bscale*alpha;
+        // double sumBX = 0.0;
+        // for(int j=0; j<p_mod; j++){
+        //   sumBX += beta[j]*di_mod.x[i*di_mod.p + j];
+        // }
+        // double bscale = (i < ntrt) ? bscale1 : bscale0;
+        allfit[i]     = allfit[i]     -z_[i]*alpha;
+        allfit_mod[i] = allfit_mod[i] -z_[i]*alpha;
         
-        r_alpha[i] = y[i] - allfit_mod[i];
+        r_alpha[i] = y[i] - allfit[i];
       }
       
-      alpha = sample_alpha(n, r_alpha, sigma, alpha_prior_sd);
+      alpha = sample_alpha(n, r_alpha, z_, sigma, alpha_prior_sd);
       
       for(int i = 0; i < n; i++){
-        double bscale = (i < ntrt) ? bscale1 : bscale0;
-        allfit[i]     = allfit[i]     +bscale*alpha;
-        allfit_mod[i] = allfit_mod[i] +bscale*alpha;
+        allfit[i]     = allfit[i]     +z_[i]*alpha;
+        allfit_mod[i] = allfit_mod[i] +z_[i]*alpha;
       }
       
       for(int j=0; j<p_mod; j++){
         // partial residual wrt beta_j
         for(int i=0; i<n; i++){
-          double bscale = (i < ntrt) ? bscale1 : bscale0;
-          allfit[i]     = allfit[i]     -bscale*beta[j]*di_mod.x[i*di_mod.p + j]; //subtract the contributions. 
-          allfit_mod[i] = allfit_mod[i] -bscale*beta[j]*di_mod.x[i*di_mod.p + j];
-          r_beta[i] = y[i] - allfit_mod[i];
+          allfit[i]     = allfit[i]     -z_[i]*beta[j]*di_mod.x[i*di_mod.p + j]; //subtract the contributions. 
+          allfit_mod[i] = allfit_mod[i] -z_[i]*beta[j]*di_mod.x[i*di_mod.p + j];
+          r_beta[i] = y[i] - allfit[i];
         }
         NumericVector w_j(n);
         for(int i=0; i<n; i++){
           w_j[i] = di_mod.x[i*di_mod.p + j];
         }
-        beta[j] = sample_beta_j(n, r_beta, z, w_j, tau[j], sigma_lin);
+        beta[j] = sample_beta_j(n, r_beta, z_, w_j, tau[j], sigma);
         // then update tau_j using half-Cauchy
         tau[j] = sample_tau_j_slice(tau[j], beta[j], sigma);
         for(int i=0; i<n; i++){
           double bscale = (i < ntrt) ? bscale1 : bscale0;
-          allfit[i]     = allfit[i]     +bscale*beta[j]*di_mod.x[i*di_mod.p + j]; //re-add the contributions. 
-          allfit_mod[i] = allfit_mod[i] +bscale*beta[j]*di_mod.x[i*di_mod.p + j];
+          allfit[i]     = allfit[i]     +z_[i]*beta[j]*di_mod.x[i*di_mod.p + j]; //re-add the contributions. 
+          allfit_mod[i] = allfit_mod[i] +z_[i]*beta[j]*di_mod.x[i*di_mod.p + j];
         }
       }
         for(int i=0; i<n; i++){
-          resid[i] = y[i] - allfit_mod[i];
+          resid[i] = y[i] - allfit[i];
         }
         double sigma2 = sample_sigma2_ig(n, resid, sigma2_prior_a, sigma2_prior_b);
         sigma_lin = std::sqrt(sigma2);
@@ -1066,7 +1064,7 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
     
     Rcout << "time for loop: " << time2 - time1 << endl;
     
-    t_mod.clear(); t_con.clear();
+    // t_mod.clear(); t_con.clear();
     delete[] allfit;
     delete[] allfit_mod;
     delete[] allfit_con;

@@ -1,0 +1,311 @@
+---
+title: "Causal Inference and Propensity Score Methods: R Tutorial Day 4 Solutions"
+author: "Adapted from Thomas Klausch"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Instructions
+
+1.  **Copy all text from this file** into a new file named, for example, `day4_solutions.Rmd`.
+2.  **Place** your `connors.rdata` file in the same directory (or update the path in the code).
+3.  Open `day4_solutions.Rmd` in RStudio and click **Knit**.
+
+------------------------------------------------------------------------
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+
+# Install packages if necessary (uncomment if needed):
+install.packages(c("MatchIt", "sandwich", "lmtest" ,"marginaleffects"))
+library(MatchIt)
+library(sandwich)
+library(lmtest)
+library(marginaleffects)
+```
+
+## 1. Advanced Matching Methods
+
+### 1(a) Load data and basic checks
+
+```{r load-data}
+# Load the data (make sure connors.rdata is in your working directory)
+load("C:/Users/P094412/Documents/bcf-linear/connors.rdata")  # loads data as 'dat'
+
+dim(dat)
+summary(dat)
+table(dat$W)
+```
+
+**Answer (a)**:\
+Yes, the data are suitable for matching because there are more controls than treated units.
+
+### 1(b) Simple 1:1 Nearest Neighbor Matching
+
+```{r match1}
+match1 <- matchit(
+  W ~ sex + race + edu + age + aps + temp + meanbp + resp_rate + hrt_rate + paco2,
+  data = dat,
+  distance = "glm",    # logistic regression for propensity score
+  method   = "nearest",# 1:1 NN matching
+  ratio    = 1
+)
+
+summary(match1)
+```
+
+**Answer (b)**:\
+No, balance criteria (\|SMD\| \< 0.1 and variance ratio near 1) are not fully met (e.g. `aps` is still imbalanced).
+
+### 1(c) Improved Matching with Polynomial Terms
+
+```{r match2}
+# Fit a more flexible PS model with polynomial terms
+psmod <- glm(
+  W ~ sex + race + poly(edu, 2) + poly(age, 2) + poly(aps, 2) +
+       poly(temp, 2) + poly(meanbp, 2) + poly(resp_rate, 2) +
+       poly(hrt_rate, 2) + poly(paco2, 2),
+  data   = dat,
+  family = binomial()
+)
+ps <- predict(psmod, type = "response")
+
+# Nearest neighbor with ratio=4, caliper=0.05, replacement=TRUE
+match2 <- matchit(
+  W ~ sex + race + edu + age + aps + temp + meanbp + resp_rate + hrt_rate + paco2,
+  data     = dat,
+  distance = ps,
+  method   = "nearest",
+  caliper  = 0.05,  # 0.05 of PS (on the SD scale)
+  ratio    = 4,
+  replace  = TRUE
+)
+
+summary(match2)
+```
+
+**Answer (c)**:\
+Yes, we now achieve excellent balance.
+
+### 1(d) Unmatched treated units
+
+```{r unmatched}
+m2_summary <- summary(match2)
+m2_unmatched <- m2_summary$nn["Unmatched", "Treated"]
+cat("Number of unmatched treated units:", m2_unmatched, "\n")
+```
+
+### 1(e) Compare `get_matches` vs. `match.data`
+
+```{r match2-outputs}
+# get_matches approach
+gm <- get_matches(match2)
+head(gm)
+
+# match.data approach
+md <- match.data(match2)
+head(md)
+
+cat("\nWeights in 'gm':\n")
+print(table(gm$weights))
+
+cat("\nWeights in 'md':\n")
+print(table(md$weights))
+```
+
+**Answer (e)**:\
+- With replacement matching, the same control can be matched multiple times.\
+- `get_matches()` duplicates the control rows if they are used multiple times.\
+- `match.data()` does not duplicate rows; instead, it inflates the control's weight to reflect multiple matches.
+
+### 1(f) Causal Odds Ratio (ATT) for 30-day Death
+
+```{r match2-effect}
+fit <- glm(
+  death30 ~ W,
+  data    = gm,
+  weights = gm$weights,
+  family  = binomial()
+)
+
+# Cluster-robust standard errors (assuming 'id' and 'subclass' exist)
+# If 'id' is not in dat, remove it from cluster
+res   <- coeftest(fit, vcov. = vcovCL, cluster = ~id + subclass)
+OR_est <- exp(res[2,1])
+p_val  <- 2 * pnorm(abs(res[2,1]/res[2,2]), lower.tail=FALSE)
+
+cat("Estimated OR for death30:", round(OR_est, 3), "\n")
+cat("p-value:", round(p_val, 4), "\n")
+```
+
+**Answer (f)**:\
+Estimate is about 1.07, not significant, unlike the original Connors et al. conclusion.
+
+### 1(g) Full Matching
+
+```{r match3}
+match3 <- matchit(
+  W ~ sex + race + edu + age + aps + temp + meanbp + resp_rate + hrt_rate + paco2,
+  data     = dat,
+  distance = ps,
+  method   = "full",
+  estimand = "ATT"
+)
+
+summary(match3)
+```
+
+**Answer (g)**:\
+Balance is similarly excellent. Full matching typically uses *all* subjects by assigning them appropriate weights.
+
+### 1(h) Effect with Full Matching
+
+```{r match3-effect}
+gm3 <- match.data(match3)
+fit3 <- glm(
+  death30 ~ W,
+  data    = gm3,
+  weights = gm3$weights,
+  family  = binomial()
+)
+
+res3    <- coeftest(fit3, vcov. = vcovCL, cluster = ~subclass)
+OR_est3 <- exp(res3[2,1])
+cat("Full Matching OR:", round(OR_est3, 3), "\n")
+```
+
+**Answer (h)**:\
+Very similar effect estimate, slightly bigger standard error.
+
+### 1(i) ANCOVA-style regression after matching
+
+```{r ancova}
+msm3 <- glm(
+  death30 ~ W + sex + race + edu + age + aps + temp + meanbp + resp_rate + hrt_rate,
+  data    = gm3,
+  weights = gm3$weights,
+  family  = binomial()
+)
+
+avg_comparisons(
+  msm3,
+  variables  = "W",
+  newdata    = subset(gm3, W == 1),   # for ATT
+  comparison = "lnoravg",
+  vcov       = ~subclass,
+  wts        = "weights",
+  transform  = exp
+)
+```
+
+**Answer (i)**:\
+Similar point estimate to the direct logistic approach, but potentially smaller residual bias and a more robust design-based inference.
+
+------------------------------------------------------------------------
+
+## 2. Double Robust Estimation (AIPW)
+
+We use the following function for the risk difference version of AIPW:
+
+```{r aipw-func}
+ace_aipw <- function(y, A, w, m1, m0) {
+  n  <- length(y)
+  # influence components
+  I1 <- A * w * y - w * (A - 1/w) * m1
+  I0 <- (1 - A) * w * y - w * ((1 - A) - 1/w) * m0
+  
+  Ey1.est <- sum(I1) / n
+  Ey0.est <- sum(I0) / n
+  ace     <- Ey1.est - Ey0.est
+  
+  # approximate var (risk difference)
+  I       <- I1 - I0
+  var.ace <- (1/n^2) * sum((I - ace)^2)
+  se.ace  <- sqrt(var.ace)
+  
+  c(Ey1.est = Ey1.est, Ey0.est = Ey0.est, ace = ace, `se(ace)` = se.ace)
+}
+```
+
+### 2(a) & 2(b) Fit outcome & PS models with polynomials
+
+```{r dr-models}
+outcome_model <- death30 ~ sex + race + poly(edu,2) + poly(age,2) +
+                            poly(aps,2) + poly(temp,2) + poly(meanbp,2) +
+                            poly(resp_rate,2) + poly(hrt_rate,2) + poly(paco2,2)
+
+mod0 <- glm(outcome_model, data=dat, family=binomial, subset=(W==0))
+mod1 <- glm(outcome_model, data=dat, family=binomial, subset=(W==1))
+
+psmod <- glm(
+  W ~ sex + race + poly(edu,2) + poly(age,2) + poly(aps,2) +
+       poly(temp,2) + poly(meanbp,2) + poly(resp_rate,2) +
+       poly(hrt_rate,2) + poly(paco2,2),
+  data   = dat,
+  family = binomial()
+)
+
+summary(mod0)
+summary(mod1)
+summary(psmod)
+```
+
+### 2(c) & 2(d) Predictions + AIPW estimate (risk difference)
+
+```{r dr-aipw}
+py0 <- predict(mod0, newdata=dat, type="response")  # P(Y=1|X,A=0)
+py1 <- predict(mod1, newdata=dat, type="response")  # P(Y=1|X,A=1)
+ps  <- predict(psmod, newdata=dat, type="response") # P(A=1|X)
+
+w <- ifelse(dat$W==1, 1/ps, 1/(1-ps))
+
+res_aipw <- ace_aipw(y=dat$death30, A=dat$W, w=w, m1=py1, m0=py0)
+res_aipw
+```
+
+**Answer**:\
+Check the 95% CI with:
+
+```{r dr-ci}
+rd     <- res_aipw["ace"]
+se_rd  <- res_aipw["se(ace)"]
+ci_low <- rd - 1.96*se_rd
+ci_up  <- rd + 1.96*se_rd
+
+cat("AIPW Risk Difference:", round(rd,4),
+    " with 95% CI = [", round(ci_low,4), ",", round(ci_up,4), "]\n")
+```
+
+Likely it is not significant at $\alpha=0.05$.
+
+### 2(e) Advanced: AIPW for the Odds Ratio
+
+```{r dr-aipw-or}
+ace_aipw_or <- function(y, A, w, m1, m0) {
+  n  <- length(y)
+  I1 <- A * w * y - w * (A - 1/w) * m1
+  I0 <- (1 - A) * w * y - w * ((1 - A) - 1/w) * m0
+  
+  Ey1.est <- sum(I1) / n
+  Ey0.est <- sum(I0) / n
+  
+  # OR = [p1/(1-p1)] / [p0/(1-p0)]
+  or_est   <- (Ey1.est / (1 - Ey1.est)) / (Ey0.est / (1 - Ey0.est))
+  
+  c(Ey1.est=Ey1.est, Ey0.est=Ey0.est, OR=or_est)
+}
+
+res_aipw_or <- ace_aipw_or(dat$death30, dat$W, w, py1, py0)
+res_aipw_or
+```
+
+**Answer**:\
+The AIPW OR is around \~1.06, which is not significant either.
+
+------------------------------------------------------------------------
+
+**End of Document**

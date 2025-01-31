@@ -161,28 +161,29 @@ double sample_tau_j_slice(
 // [[Rcpp::export]]
 double sample_alpha(
     int N,
-    NumericVector r_alpha,     // partial residual
-    double sigma,              // current residual sd
+    NumericVector r_alpha, // partial residual
+    NumericVector z_,      // treatment indicator
+    double sigma,
     double alpha_prior_sd = 10.0
 ) {
   // prior alpha ~ N(0, alpha_prior_sd^2)
   double prior_var   = alpha_prior_sd * alpha_prior_sd;
-  
-  // data precision = N / sigma^2
-  double prec_data   = (double)N / (sigma*sigma);
-  // prior precision
   double prec_prior  = 1.0 / prior_var;
+  
+  // gather sum of z_i and sum of z_i * r_alpha[i]
+  double sum_z = 0.0;
+  double sum_rz = 0.0;
+  for(int i = 0; i < N; i++){
+    sum_z  += z_[i];
+    sum_rz += z_[i] * r_alpha[i];
+  }
    
-  double prec_post   = prec_data + prec_prior;
-  double var_post    = 1.0 / prec_post;
-   
-  // sum of partial residual
-  double sum_r = 0.0;
-  for(int i=0; i<N; i++){
-    sum_r += r_alpha[i];
-  } 
-  double mean_post = var_post * ( sum_r / (sigma*sigma) );
-   
+  // data precision = sum(z_i^2) / sigma^2 = (# treated) / sigma^2 if z is 0/1
+  double prec_data = sum_z / (sigma * sigma);
+  double prec_post = prec_data + prec_prior;
+  double var_post  = 1.0 / prec_post;
+  // posterior mean
+  double mean_post = var_post * ( sum_rz / (sigma * sigma) );
   // draw from Normal(mean_post, sqrt(var_post))
   double alpha_draw = R::rnorm(mean_post, std::sqrt(var_post));
   return alpha_draw;
