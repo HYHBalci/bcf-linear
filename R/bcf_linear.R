@@ -239,10 +239,10 @@ bcf_linear <- function(y, z, x_control, x_moderate=x_control, pihat, w = NULL,
                 save_tree_directory = '.',
                 log_file=file.path('.',sprintf('bcf_log_%s.txt',format(Sys.time(), "%Y%m%d_%H%M%S"))),
                 nu = 3, lambda = NULL, sigq = .9, sighat = NULL,
-                include_pi = "control", use_muscale=TRUE, use_tauscale=TRUE, verbose=TRUE, do_parallel = TRUE
+                include_pi = "control", use_muscale=TRUE, use_tauscale=TRUE, verbose=TRUE, do_parallel = TRUE, intTreat = TRUE
 ) {
   
-  
+  start_time <- proc.time()
   if(is.null(w)){
     w <- matrix(1, ncol = 1, nrow = length(y))
   }
@@ -327,6 +327,7 @@ bcf_linear <- function(y, z, x_control, x_moderate=x_control, pihat, w = NULL,
   RcppParallel::setThreadOptions(numThreads=n_threads)
   
   # Hardcoding n_cores = 1, needs more attention to make multi-core works with multi-threading
+  # n_cores <- 4 PAS ASSEZ VITE!!!!!!
   n_cores <- 1
   do_type_config <- .get_do_type(n_cores, log_file)
   `%doType%` <- do_type_config$doType
@@ -336,7 +337,7 @@ bcf_linear <- function(y, z, x_control, x_moderate=x_control, pihat, w = NULL,
     
     cat("Calling bcfoverparRcppClean From R\n")
     set.seed(this_seed)
-    
+    source("R/setup_parallel.R")
     tree_files = .get_chain_tree_files(save_tree_directory, iChain, no_output)
     
     fitbcf = bcfoverparRcppCleanLinear(y_ = yscale[perm], z_ = z[perm], w_ = w[perm],
@@ -361,7 +362,7 @@ bcf_linear <- function(y, z, x_control, x_moderate=x_control, pihat, w = NULL,
                                        status_interval = update_interval,
                                        use_mscale = use_muscale, use_bscale = use_bscale, 
                                        b_half_normal = TRUE, verbose_sigma=verbose, 
-                                       no_output=no_output)
+                                       no_output=no_output, intTreat = intTreat)
     
     
     chain_data <- fitbcf
@@ -460,7 +461,9 @@ for (iChain in 1:n_chains) {
   save(chain_data, file = filename)
 }}
 
-  
+  end_time <- proc.time()
+  print('getting all the chains, took:')
+  print(end_time - start_time)
   all_sigma = c()
   all_mu_scale = c()
   all_tau_scale = c()
@@ -476,7 +479,7 @@ for (iChain in 1:n_chains) {
   
   n_iter = length(chain_out[[1]]$sigma)
   
-  for (iChain in 1:4){
+  for (iChain in 1:n_chains){
     
     sigma            <- chain_out[[iChain]]$sigma
     mu_scale         <- chain_out[[iChain]]$mu_scale
@@ -501,11 +504,11 @@ for (iChain in 1:n_chains) {
     all_b0 = c(all_b0, b0)
     all_b1 = c(all_b1, b1)
     
-    all_yhat = rbind(all_yhat, yhat)
-    all_mu   = rbind(all_mu,   mu)
-    all_tau  = rbind(all_tau,  tau)
+    all_yhat = c(all_yhat, yhat)
+    all_mu   = c(all_mu,   mu)
+    all_tau  = c(all_tau,  tau)
     
-    all_beta = rbind(all_beta, beta)
+    all_beta = c(all_beta, beta)
     print('beta right now: ')
     print(all_beta)
     # -----------------------------    

@@ -48,6 +48,7 @@ run_mcmc_univariate_horseshoe <- function(
     alpha <- sample_alpha(
       N          = N,
       r_alpha    = r_alpha,
+      z_ = rep(1.0, N),
       sigma      = sigma,
       alpha_prior_sd = alpha_prior_sd
     )

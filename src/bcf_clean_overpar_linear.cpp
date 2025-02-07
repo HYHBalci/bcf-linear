@@ -5,6 +5,7 @@
 #include <vector>
 #include <ctime>
 #include <cmath>
+#include <utility>
 
 #include "rng.h"
 #include "tree.h"
@@ -47,9 +48,9 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
                          int status_interval=100,
                          bool RJ= false, bool use_mscale=true, bool use_bscale=true, bool b_half_normal=true,
                          double trt_init = 0.0, bool verbose_sigma=false, 
-                         bool no_output=false, bool Tian = false)
+                         bool no_output=false, bool intTreat = true)
 {
-  
+  R_FlushConsole(); // Flush the console so to not overload it with all the messages printed. 
   bool randeff = true;
   if(random_var_ix.n_elem == 1) {
     randeff = false;
@@ -305,11 +306,24 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
     arma::mat gamma_post(nd,gamma.n_elem);
     arma::mat random_var_post(nd,random_var.n_elem);
     
+    
     // Linear Part Posterior vectors and Matrix
     
     NumericVector alphaOut(nd), sigmaOut(nd);
     NumericMatrix betaOut(nd, p_mod);
     NumericMatrix tauOut(nd, p_mod);
+    
+    // Initialize for the interaction terms
+    NumericVector tau_int_post(nd);
+    int p_int = (p_mod * (p_mod + 1)) / 2;
+    NumericMatrix beta_intOut(nd, p_int);
+    std::vector<std::pair<int,int>> int_pairs;
+    int_pairs.reserve(p_int);
+    for(int ii = 0; ii < p_mod; ii++){
+      for(int jj = ii; jj < p_mod; jj++){
+        int_pairs.push_back(std::make_pair(ii, jj));
+        }
+    }
     
     double alpha = 0.0;
     double sigma_lin = 1;
@@ -318,6 +332,10 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
     
     NumericVector r_alpha(n), r_beta(n), resid(n); 
     NumericVector z(n, 1.0);
+    
+    //for interaction terms
+    std::vector<double> beta_int(p_int, 0.0);
+    double tau_int = 0.5;
     
     //  NumericMatrix spred2(nd,dip.n);
     
@@ -570,7 +588,6 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
           w_j[i] = di_mod.x[i*di_mod.p + j];
         }
         beta[j] = sample_beta_j(n, r_beta, z_, w_j, tau[j], sigma);
-        // then update tau_j using half-Cauchy
         tau[j] = sample_tau_j_slice(tau[j], beta[j], sigma);
         for(int i=0; i<n; i++){
           double bscale = (i < ntrt) ? bscale1 : bscale0;
@@ -578,21 +595,79 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
           allfit_mod[i] = allfit_mod[i] +z_[i]*beta[j]*di_mod.x[i*di_mod.p + j];
         }
       }
-        for(int i=0; i<n; i++){
-          resid[i] = y[i] - allfit[i];
-        }
-        double sigma2 = sample_sigma2_ig(n, resid, sigma2_prior_a, sigma2_prior_b);
-        sigma_lin = std::sqrt(sigma2);
+      if(intTreat){
+        for(int k = 0; k < p_int; k++) {
+        // (iVar, jVar) for the pair
+        int iVar = int_pairs[k].first;
+        int jVar = int_pairs[k].second;
         
-        // Save results of our iteration 
-        if(((iIter>=burn) & (iIter % thin==0)) )  {
+        // 2) Remove old contribution of beta_int[k] from allfit[]
+        for(int i = 0; i < n; i++){
+          double x_ij = di_mod.x[i*di_mod.p + iVar] * di_mod.x[i*di_mod.p + jVar];
+          allfit[i]   -= z_[i] * beta_int[k] * x_ij;
+          // partial residual for sampling
+          r_beta[i]    = y[i] - allfit[i];
+        }
+        
+        // 3) Sample the new beta_int[k] using a function that accounts for:
+        //    - Prior: N(0, tau_int * tau[iVar] * tau[jVar] * sigma^2)
+        //    - Data likelihood
+        //    (Adapt the same approach you used for sample_beta_j(...))
+        NumericVector w_j(n);
+        for(int i=0; i<n; i++){
+          w_j[i] = di_mod.x[i*di_mod.p + iVar] * di_mod.x[i*di_mod.p + jVar];
+        }
+        beta_int[k] = sample_beta_j(n, r_beta, z_, w_j, std::sqrt(tau_int*tau[iVar]*tau[jVar]), sigma);
+        
+        // 4) Add the *new* contribution back
+        for(int i = 0; i < n; i++){
+          double x_ij = di_mod.x[i*di_mod.p + iVar] * di_mod.x[i*di_mod.p + jVar];
+          allfit[i]   += z_[i] * beta_int[k] * x_ij;
+        }
+      }
+        // Example: Metropolis step for tau_int
+        double currentTauInt = tau_int;
+        double proposedTauInt = R::runif(0.01, 1.0); // sample from Uniform(0.01,1)
+        
+        // Evaluate log posterior ratio = log p(data|tau_int_prop) + log p(tau_int_prop)
+        //                              - (log p(data|tau_int_current) + log p(tau_int_current))
+        // log p(tau_int) = 0 if uniform(0.01,1), ignoring the boundary checks.
+        
+        double logPosteriorCurrent = loglikeTauInt(currentTauInt, beta_int, tau, sigma, int_pairs);
+        double logPosteriorProposed = loglikeTauInt(proposedTauInt, beta_int, tau, sigma, int_pairs);
+        
+        double logAccept = logPosteriorProposed - logPosteriorCurrent;
+        
+        if(R::runif(0.0, 1.0) < std::exp(logAccept)) {
+          tau_int = proposedTauInt;  
+        } else {
+          tau_int = currentTauInt;
+        }
+        
+      }
+      
+      for(int i=0; i<n; i++){
+          resid[i] = y[i] - allfit[i];}
+      
+      double sigma2 = sample_sigma2_ig(n, resid, sigma2_prior_a, sigma2_prior_b);
+      sigma_lin = std::sqrt(sigma2);
+        
+      // Save results of our iteration 
+      if(((iIter>=burn) & (iIter % thin==0)) )  {
           int it = (iIter - burn) / thin;
           alphaOut[it] = alpha;
           sigmaOut[it] = sigma;
           for(int j=0; j<p_mod; j++){
             betaOut(it, j) = beta[j];
-            tauOut(it, j)  = tau[j];          
+            tauOut(it, j)  = tau[j];  
             }
+          if(intTreat){
+            tau_int_post[it] = tau_int;
+            for(int j=0; j<p_int; j++){
+              beta_intOut(it, j) = beta_int[j];
+            }
+            
+          }
         }
         
         
@@ -1073,6 +1148,8 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
     delete[] r_con;
     delete[] ftemp;
     
+    R_FlushConsole(); // Flush the console so to not overload it with all the messages printed.
+    
     if(not treef_con_name.empty()){
       treef_con.close();
       // treef_mod.close();
@@ -1080,6 +1157,6 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
     
     return(List::create(_["yhat_post"] = yhat_post, _["m_post"] = m_post, _["b_post"] = b_post,
                         _["sigma"] = sigma_post, _["msd"] = msd_post, _["bsd"] = bsd_post, _["b0"] = b0_post, _["b1"] = b1_post,
-                        _["gamma"] = gamma_post, _["random_var_post"] = random_var_post, _["Beta"] = betaOut, _["tau"] = tauOut, _["alpha"] = alphaOut 
+                        _["gamma"] = gamma_post, _["random_var_post"] = random_var_post, _["Beta"] = betaOut, _["tau"] = tauOut, _["alpha"] = alphaOut, _["tau_int"] = tau_int_post, _["beta_int"] = beta_intOut
     ));
 }

@@ -71,7 +71,6 @@ double sample_beta_j(
  */
 
 
-// A helper for the log posterior of tau_j
 static double log_p_tau(double tau, double beta_j, double sigma)
 { 
   // Half-Cauchy(0,1): p(tau) = 2/pi * 1/(1 + tau^2), tau>0
@@ -92,13 +91,6 @@ static double log_p_tau(double tau, double beta_j, double sigma)
     + 2.0 * std::log(tau)
     + (beta_j * beta_j) / ( (sigma * sigma) * (tau * tau) )
   ); 
-  
-  return log_prior + (-0.5) * log_lik * -2.0; 
-  // ^ that line is suspect. Actually, let's do it carefully:
-  // The expression inside is:
-  //    -0.5*( log(2π) + 2log(sigma) + 2log(tau) + (beta_j^2/(σ^2 τ^2)) )
-  // We'll rewrite it properly:
-   
   log_lik = -0.5 * (
     std::log(2.0 * M_PI)
     + 2.0 * std::log(sigma)
@@ -122,41 +114,46 @@ double sample_tau_j_slice(
   // 2) Draw a vertical level
   double u = R::runif(0.0, 1.0);
   double y_slice = logP_old + std::log(u);
-
+  
   // 3) Create an interval [L, R] containing tau_old
   double L = std::max(1e-12, tau_old - step_out);
   double R = tau_old + step_out;
-
-  // Step out to the left
-  while( (L > 1e-12) && (log_p_tau(L, beta_j, sigma) > y_slice) ) {
+   
+  // Step out to the left (Prevent Infinite Loop)
+  int step_count = 0;
+  while( (L > 1e-12) && (log_p_tau(L, beta_j, sigma) > y_slice) && step_count < max_steps) {
     L = std::max(1e-12, L - step_out);
-  } 
-  // Step out to the right
-  while( log_p_tau(R, beta_j, sigma) > y_slice ) {
-    R += step_out;
+    step_count++;
   }
-
+  
+  // Step out to the right (Prevent Infinite Loop)
+  step_count = 0;
+  while( log_p_tau(R, beta_j, sigma) > y_slice && step_count < max_steps) {
+    R += step_out;
+    step_count++;
+  }
+   
   // 4) Shrink the bracket until we find a sample
   for(int rep = 0; rep < max_steps; rep++) {
-    double prop = R::runif(L, R);
+    double prop = std::max(1e-8, R::runif(L, R)); // Prevent log underflow
     double lp   = log_p_tau(prop, beta_j, sigma);
-
+     
     if(lp > y_slice) {
       // Accept
       return prop;
-    } else { 
+    } else {  
       // Shrink bracket
       if(prop < tau_old) {
         L = prop;
-       } else {
+      } else { 
         R = prop;
       }
     }
-  }
-  
-  // If we never find a point in 'max_steps' tries, return old value
-  return tau_old;
-}
+  } 
+
+  // If we never find a point in 'max_steps' tries, return a slightly perturbed tau_old
+  return tau_old * (1.0 + 0.01 * R::runif(-1.0, 1.0));
+} 
 
 // [[Rcpp::export]]
 double sample_alpha(
@@ -196,23 +193,54 @@ double sample_sigma2_ig(
     double shape_prior = 1.0, 
     double rate_prior  = 0.001
 ) {
-  // compute residual sum of squares
-  double rss = 0.0;
-  for(int i=0; i<N; i++){
-    double e = resid[i];
-    rss += e*e;
-  }
-   
-  // posterior shape
-  double shape_post = shape_prior + 0.5 * (double)N;
-  // posterior rate
-  double rate_post  = rate_prior + 0.5 * rss;
-
-  double scale_post = 1.0 / rate_post;
-  // gamma draw
-  double gamma_draw = R::rgamma(shape_post, scale_post);
-
+  if (N == 0) return NA_REAL;  
   
-  double sigma2_draw = 1.0 / gamma_draw;
-  return sigma2_draw;
+  // Compute residual sum of squares using vectorized Rcpp
+  double rss = sum(resid * resid);
+  
+  // Compute posterior parameters
+  double shape_post = shape_prior + 0.5 * N;
+  double rate_post  = rate_prior + 0.5 * rss;
+  
+  double gamma_draw = R::rgamma(shape_post, 1.0 / rate_post);
+  
+  // Return inverse of gamma draw (Inverse-Gamma sample)
+  return 1.0 / gamma_draw;
+}
+
+// loglikeTauInt returns the PRIOR contribution (log p(beta_int | tau_int)).
+// If tau_int is outside (0.01, 1), return -∞ (invalid).
+// beta_int:   current vector of interaction coefficients
+// tau:        vector of main-effect scale parameters tau[i]
+// sigma:      current sigma (stdev of the error term)
+// int_pairs:  vector of (iVar, jVar) pairs for interactions
+
+double loglikeTauInt(
+    double tau_int,
+    const std::vector<double> &beta_int,
+    const std::vector<double> &tau,
+    double sigma,
+    const std::vector<std::pair<int,int>> &int_pairs
+){
+  // 1) Check Uniform(0.01,1) boundary
+  if(tau_int < 0.01 || tau_int > 1.0){
+    return -std::numeric_limits<double>::infinity();
+  }
+  
+  double logp = 0.0;
+  const double log2pi = std::log(2.0 * M_PI);
+  
+  for(int k = 0; k < (int)int_pairs.size(); k++){
+    int iVar = int_pairs[k].first;
+    int jVar = int_pairs[k].second;
+    
+    double var_ij = tau_int * tau[iVar] * tau[jVar] * (sigma*sigma);
+    double beta2  = beta_int[k]*beta_int[k];
+    
+    // Log of N(0, var_ij) = -0.5 * [log(2π var_ij) + beta^2/var_ij]
+    logp += -0.5 * (log2pi + std::log(var_ij)) 
+      - 0.5 * (beta2 / var_ij);
+  }
+
+  return logp;  // This is the log PRIOR for all beta_int given tau_int
 }

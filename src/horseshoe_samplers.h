@@ -30,8 +30,6 @@ double sample_tau_j_slice(
     int max_steps = 50
 );
 
-static double log_p_tau(double tau, double beta_j, double sigma);
-
 double sample_alpha(
     int N,
     NumericVector r_alpha, // partial residual
@@ -45,6 +43,14 @@ double sample_sigma2_ig(
     NumericVector resid,   // vector of residuals e_i
     double shape_prior = 1.0, 
     double rate_prior  = 0.001
+);
+
+double loglikeTauInt(
+    double tau_int,
+    const std::vector<double> &beta_int,
+    const std::vector<double> &tau,
+    double sigma,
+    const std::vector<std::pair<int,int>> &int_pairs
 );
 
 #endif 

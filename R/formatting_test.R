@@ -1,14 +1,31 @@
 
 all_beta <- c()
-for(iChain in 1:4) {
+chains <- list()
+for(iChain in 1:1) {
   # Create a dynamic filename based on iChain
   filename <- sprintf("chain_data_%d.RData", iChain)
   
   # Save the object to an RDS file
   load(filename)
+  if(iChain==1){
+    chain_1 <- chain_data
+  } else if(iChain == 2) {
+    chain_2 <- chain_data
+  } else if(iChain == 3) {
+    chain_3 <- chain_data
+  } else {
+    chain_4 <- chain_data
+  }
   all_beta <- cbind(all_beta, t(chain_data$Beta))
 }
- 
+library(coda)
+chains <- mcmc.list(
+  mcmc(as.matrix(chain_1$Beta[,3])),
+  mcmc(as.matrix(chain_4$Beta[,3]))
+)
+
+gelman.diag(chains)
+
 # all_beta <- t(all_beta)
 chain_out <- vector("list", 4)
 
@@ -127,12 +144,12 @@ windows()  # For Windows
 hist(chain_data$m_post)
 
 
-plot(chain_data$Beta[,3], type = "l", col = "blue", main = "Trace Plot of MCMC Draws",
+plot(sd(y)*chain_data$Beta[,3], type = "l", col = "blue", main = "Trace Plot of MCMC Draws",
      xlab = "Iteration", ylab = "Value")
 abline(h = mean(chain_data$Beta[,3]), col = "red", lwd = 2, lty = 2) 
 
+fitObj$beta_adj <- fitObj$beta*sd(y)
 
 library(coda)
 geweke.diag(chain_data$Beta[,2])
 raftery.diag(chain_data$Beta[,2])
-
