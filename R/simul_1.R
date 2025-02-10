@@ -1,9 +1,8 @@
-# ---------------------------------------------------------
-# 1) Function to generate one dataset for a given scenario
-# ---------------------------------------------------------
+
 generate_data <- function(n = 250,
                           is_te_hetero = FALSE,  # toggles homogeneous vs heterogeneous
-                          is_mu_nonlinear = FALSE) {
+                          is_mu_nonlinear = TRUE, seed = 1848) {
+  set.seed(seed)
   # -- 1. Generate covariates --
   x1 <- rnorm(n, mean=0, sd=1)
   x2 <- rnorm(n, mean=0, sd=1)
@@ -68,45 +67,25 @@ generate_data <- function(n = 250,
   eps <- rnorm(n, 0, 1)
   y <- mu + z*tau_vec + eps
   
-  # Return in a data frame
-  data.frame(
+  # Convert x5 into a factor
+  x5_factor <- factor(x5_raw, levels = c(1, 2, 3))  
+  
+  # Create dummy variables
+  x5_dummy <- model.matrix(~ x5_factor - 1)  # Removes intercept to get separate dummies
+  
+  # Combine with the original data
+  df <- data.frame(
     x1 = x1, 
     x2 = x2, 
     x3 = x3,
     x4 = x4,
-    x5 = factor(x5_raw, levels=c(1,2,3)),  # store as factor
+    x5_1 = x5_dummy[, 1],  # Dummy variable for level 1
+    x5_2 = x5_dummy[, 2],  # Dummy variable for level 2
+    x5_3 = x5_dummy[, 3],  # Dummy variable for level 3
     z  = z,
     y  = y,
     mu = mu,
+    pi_x = pi_x, 
     tau = tau_vec
   )
 }
-
-# ---------------------------------------------------------
-# 2) Generate the 8 scenarios by toggling:
-#    (1) Treatment effect: homogeneous vs. hetero
-#    (2) mu: linear vs. nonlinear
-#    (3) sample size: n=250 vs. n=500
-# ---------------------------------------------------------
-scenarios <- expand.grid(
-  n = c(250, 500),
-  te_hetero = c(FALSE, TRUE),
-  mu_nonlinear = c(FALSE, TRUE)
-)
-
-# We'll store a list of data sets, one per row of 'scenarios'
-sim_data_list <- vector("list", length = nrow(scenarios))
-
-for(i in seq_len(nrow(scenarios))) {
-  par_i <- scenarios[i, ]
-  sim_data_list[[i]] <- generate_data(
-    n             = par_i$n,
-    is_te_hetero  = par_i$te_hetero,
-    is_mu_nonlinear = par_i$mu_nonlinear
-  )
-  cat(sprintf("Generated scenario %d: n=%d, TE_hetero=%s, mu_nonlinear=%s\n",
-              i, par_i$n, par_i$te_hetero, par_i$mu_nonlinear))
-}
-
-# Now 'sim_data_list' contains 8 data frames for the 8 scenarios.
-# Each data frame has columns: (x1, x2, x3, x4, x5, z, y, mu, tau).
