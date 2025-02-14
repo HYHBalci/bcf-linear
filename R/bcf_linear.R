@@ -384,6 +384,10 @@ bcf_linear <- function(y, z, x_control, x_moderate=x_control, pihat, w = NULL,
     
     mu_post  = muy + sdy*(Tc*fitbcf$msd + Tm*fitbcf$b0)
     
+    Beta <- sdy*fitbcf$Beta
+    beta_int <- sdy*fitbcf$beta_int
+    alpha <- fitbcf$alpha
+    
     list(sigma = sdy*fitbcf$sigma,
          yhat = muy + sdy*fitbcf$yhat_post[,order(perm)],
          sdy = sdy,
@@ -399,7 +403,10 @@ bcf_linear <- function(y, z, x_control, x_moderate=x_control, pihat, w = NULL,
          perm = perm,
          include_pi = include_pi,
          random_seed=this_seed, 
-         has_file_output=!no_output
+         has_file_output=!no_output,
+         Beta = Beta,
+         beta_int = beta_int,
+         alpha = alpha
     )
     
   }} else {
@@ -475,6 +482,8 @@ for (iChain in 1:n_chains) {
   all_mu   = c()
   all_tau  = c()
   all_beta = c()
+  all_beta_int = c()
+  all_alpha = c()
   chain_list=list()
   
   n_iter = length(chain_out[[1]]$sigma)
@@ -489,6 +498,8 @@ for (iChain in 1:n_chains) {
     b1               <- chain_out[[iChain]]$b1
     
     beta <- chain_out[[iChain]]$Beta
+    beta_int <- chain_out[[iChain]]$beta_int
+    alpha <- chain_out[[iChain]]$alpha
     
     yhat             <- chain_out[[iChain]]$yhat
     tau              <- chain_out[[iChain]]$tau
@@ -508,9 +519,15 @@ for (iChain in 1:n_chains) {
     all_mu   = c(all_mu,   mu)
     all_tau  = c(all_tau,  tau)
     
-    all_beta = c(all_beta, beta)
-    print('beta right now: ')
-    print(all_beta)
+    if (iChain == 1) {
+      all_beta <- beta
+      all_beta_int <- beta_int
+    } else {
+      all_beta <- rbind(all_beta, beta)  
+      all_beta_int <- rbind(all_beta_int, beta_int)
+    }
+    all_alpha = c(all_alpha, alpha)
+    
     # -----------------------------    
     # Make the MCMC Object
     # -----------------------------
@@ -528,7 +545,6 @@ for (iChain in 1:n_chains) {
     # tau_df <- as.data.frame(chain$tau)
     # colnames(tau_df) <- paste0('tau',1:ncol(tau_df))
     
-    chain_list[[iChain]] <- coda::as.mcmc(scalar_df)
     # -----------------------------    
     # Sanity Check Constants Across Chains
     # -----------------------------
@@ -548,6 +564,8 @@ for (iChain in 1:n_chains) {
                  mu  = all_mu,
                  tau = all_tau,
                  beta = all_beta,
+                 beta_int = all_beta_int,
+                 alpha = all_alpha,
                  mu_scale = all_mu_scale,
                  tau_scale = all_tau_scale,
                  b0 = all_b0,
