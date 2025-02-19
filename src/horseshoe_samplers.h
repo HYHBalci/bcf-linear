@@ -47,10 +47,15 @@ double sample_sigma2_ig(
 
 double loglikeTauInt(
     double tau_int,
-    const std::vector<double> &beta_int,
-    const std::vector<double> &tau,
+    const std::vector<double> &beta_int_base,
+    const std::vector<std::pair<int,int>> &int_pairs_base,
+    const std::vector<double> &tau_main,
     double sigma,
-    const std::vector<std::pair<int,int>> &int_pairs
-);
+    
+    bool include_treatment_int = false,
+    const std::vector<double> &beta_int_trt = std::vector<double>(),
+    const std::vector<double> &tau_trt = std::vector<double>(),
+    const std::vector<std::pair<int,int>> &int_pairs_trt = std::vector<std::pair<int,int>>()
+);  
 
 #endif 

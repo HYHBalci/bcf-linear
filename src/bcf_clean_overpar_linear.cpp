@@ -633,8 +633,29 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
         //                              - (log p(data|tau_int_current) + log p(tau_int_current))
         // log p(tau_int) = 0 if uniform(0.01,1), ignoring the boundary checks.
         
-        double logPosteriorCurrent = loglikeTauInt(currentTauInt, beta_int, tau, sigma, int_pairs);
-        double logPosteriorProposed = loglikeTauInt(proposedTauInt, beta_int, tau, sigma, int_pairs);
+        double logPosteriorCurrent = loglikeTauInt(
+          currentTauInt,
+          beta_int,
+          int_pairs,
+          tau,
+          sigma,
+          false,  // include_treatment_int
+          std::vector<double>(),   // empty beta_int_trt
+          std::vector<double>(),   // empty tau_trt
+          std::vector<std::pair<int,int>>()  // empty int_pairs_trt
+        );
+        
+        double logPosteriorProposed = loglikeTauInt(
+          proposedTauInt,
+          beta_int,
+          int_pairs,
+          tau,
+          sigma,
+          false,
+          std::vector<double>(),
+          std::vector<double>(),
+          std::vector<std::pair<int,int>>()
+        );
         
         double logAccept = logPosteriorProposed - logPosteriorCurrent;
         

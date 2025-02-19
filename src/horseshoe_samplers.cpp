@@ -217,30 +217,53 @@ double sample_sigma2_ig(
 
 double loglikeTauInt(
     double tau_int,
-    const std::vector<double> &beta_int,
-    const std::vector<double> &tau,
+    // Baseline interaction info
+    const std::vector<double> &beta_int_base,
+    const std::vector<std::pair<int,int>> &int_pairs_base,
+    // Main-effect shrinkage scales (tau) used in var = sigma^2 * tau_int * tau[iVar] * tau[jVar]
+    const std::vector<double> &tau_main,
     double sigma,
-    const std::vector<std::pair<int,int>> &int_pairs
-){
-  // 1) Check Uniform(0.01,1) boundary
+    
+    bool include_treatment_int = false,
+    const std::vector<double> &beta_int_trt = std::vector<double>(),
+    const std::vector<double> &tau_trt = std::vector<double>(),
+    const std::vector<std::pair<int,int>> &int_pairs_trt = std::vector<std::pair<int,int>>()
+)  
+{
+  // 1) Check Uniform(0.01,1.0) boundary (or whatever bounds you like)
   if(tau_int < 0.01 || tau_int > 1.0){
     return -std::numeric_limits<double>::infinity();
-  }
+  } 
   
   double logp = 0.0;
   const double log2pi = std::log(2.0 * M_PI);
-  
-  for(int k = 0; k < (int)int_pairs.size(); k++){
-    int iVar = int_pairs[k].first;
-    int jVar = int_pairs[k].second;
-    
-    double var_ij = tau_int * tau[iVar] * tau[jVar] * (sigma*sigma);
-    double beta2  = beta_int[k]*beta_int[k];
-    
-    // Log of N(0, var_ij) = -0.5 * [log(2π var_ij) + beta^2/var_ij]
+   
+  // 2) Baseline interaction terms
+  //    var_ij = tau_int * tau_main[iVar] * tau_main[jVar] * (sigma*sigma)
+  //    log N(0, var_ij)
+  for(size_t k = 0; k < int_pairs_base.size(); k++){
+    int iVar = int_pairs_base[k].first;
+    int jVar = int_pairs_base[k].second;
+    double var_ij = tau_int * tau_main[iVar] * tau_main[jVar] * (sigma * sigma);
+    double beta2  = beta_int_base[k]*beta_int_base[k];
+
+    // log of N(0, var_ij) = -0.5 * [ log(2π var_ij) + beta^2 / var_ij ]
     logp += -0.5 * (log2pi + std::log(var_ij)) 
       - 0.5 * (beta2 / var_ij);
-  }
+  } 
+  
+  // 3) Treatment interaction terms (if included)
+  if(include_treatment_int && !beta_int_trt.empty()) {
+    for(size_t k = 0; k < int_pairs_trt.size(); k++){
+      int iVar = int_pairs_trt[k].first;
+      int jVar = int_pairs_trt[k].second;
 
-  return logp;  // This is the log PRIOR for all beta_int given tau_int
+      double var_ij = tau_int * tau_main[iVar] * tau_main[jVar] * (sigma * sigma);
+      double beta2  = beta_int_trt[k]*beta_int_trt[k];
+    
+      logp += -0.5 * (log2pi + std::log(var_ij))
+        - 0.5 * (beta2 / var_ij);
+    } 
+  }
+  return logp;
 }

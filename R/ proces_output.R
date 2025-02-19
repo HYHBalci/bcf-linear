@@ -159,5 +159,5 @@ write.csv(final_summary_alpha, "posterior_summary_alpha.csv", row.names = FALSE)
 
 # ---- Print summary tables ----
 print(final_summary_beta, n = 64)
-print(final_summary_beta_int, Width = 9, n = 64)
+print(final_summary_beta_int, Width = 9, n = 250)
 print(final_summary_alpha)
