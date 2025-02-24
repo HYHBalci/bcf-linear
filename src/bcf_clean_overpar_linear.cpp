@@ -14,8 +14,10 @@
 #include "bd.h"
 #include "logging.h"
 #include "horseshoe_samplers.h"
+#include "linked_shrinkage_ll_lg.h"
 
 using namespace Rcpp;
+using namespace arma;
 // Rstudios check's suggest not ignoring these
 // #pragma GCC diagnostic ignored "-Wunused-parameter"
 // #pragma GCC diagnostic ignored "-Wcomment"
@@ -48,7 +50,7 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
                          int status_interval=100,
                          bool RJ= false, bool use_mscale=true, bool use_bscale=true, bool b_half_normal=true,
                          double trt_init = 0.0, bool verbose_sigma=false, 
-                         bool no_output=false, bool intTreat = true)
+                         bool no_output=false, bool intTreat = true, bool hamiltonian = false)
 {
   R_FlushConsole(); // Flush the console so to not overload it with all the messages printed. 
   bool randeff = true;
@@ -324,6 +326,30 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
         int_pairs.push_back(std::make_pair(ii, jj));
         }
     }
+    // acceptance counter if there is hamiltonian MCMC.
+    
+    int acceptance = 0;
+    double step_size = 1.0;      // Initial guess for the stepsize
+    double target_accept = 0.65; // Target acceptance rate
+    double H_bar = 0.0;
+    double avg_log_step = 0.0;   // Running average of log(step_size)
+    double mu = std::log(10.0 * step_size); // Bias term
+    double ksi = 0.05;         // Controls stability of adaptation
+    double t0 = 10.0;            // Initial slow adaptation
+    double kappa = 0.75;         // Controls decay of adaptation
+    
+    
+    //initialize parameters for HMCMC
+    int total_size = 1 + p_mod + p_int + p_mod + 1 + 1;  // Total number of parameters
+    arma::vec init_param(total_size, arma::fill::zeros);
+    init_param[0] = 1;
+    init_param.subvec(1, p_mod) = arma::vec(n, arma::fill::zeros);
+    init_param.subvec(p_mod + 1, p_mod + p_int) = arma::vec(n, arma::fill::zeros);
+    init_param.subvec(p_mod + p_int+ 1, p_mod + p_int + p_mod) = arma::vec(n, arma::fill::ones);
+    init_param[p_mod + p_int + p_mod + 1] = 0.5;
+    init_param[p_mod + p_int + p_mod + 2] = 1;
+    arma::vec param = init_param;
+    arma::mat samples(nd, init_param.size(), arma::fill::none);
     
     double alpha = 0.0;
     double sigma_lin = 1;
@@ -557,257 +583,196 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
       
       // Treatment Effect; Model this in a linear way drawing inspiration from 'Think Before you shrink'
       
-      for(int i=0; i<n; i++){
-        // double sumBX = 0.0;
-        // for(int j=0; j<p_mod; j++){
-        //   sumBX += beta[j]*di_mod.x[i*di_mod.p + j];
-        // }
-        // double bscale = (i < ntrt) ? bscale1 : bscale0;
-        allfit[i]     = allfit[i]     -z_[i]*alpha;
-        allfit_mod[i] = allfit_mod[i] -z_[i]*alpha;
+      if(!hamiltonian){
+        for(int i=0; i<n; i++){
+          // double sumBX = 0.0;
+          // for(int j=0; j<p_mod; j++){
+          //   sumBX += beta[j]*di_mod.x[i*di_mod.p + j];
+          // }
+          // double bscale = (i < ntrt) ? bscale1 : bscale0;
+          allfit[i]     = allfit[i]     -z_[i]*alpha;
+          allfit_mod[i] = allfit_mod[i] -z_[i]*alpha;
+          
+          r_alpha[i] = y[i] - allfit[i];
+        }
         
-        r_alpha[i] = y[i] - allfit[i];
-      }
-      
-      alpha = sample_alpha(n, r_alpha, z_, sigma, alpha_prior_sd);
-      
-      for(int i = 0; i < n; i++){
-        allfit[i]     = allfit[i]     +z_[i]*alpha;
-        allfit_mod[i] = allfit_mod[i] +z_[i]*alpha;
-      }
-      
-      for(int j=0; j<p_mod; j++){
-        // partial residual wrt beta_j
-        for(int i=0; i<n; i++){
-          allfit[i]     = allfit[i]     -z_[i]*beta[j]*di_mod.x[i*di_mod.p + j]; //subtract the contributions. 
-          allfit_mod[i] = allfit_mod[i] -z_[i]*beta[j]*di_mod.x[i*di_mod.p + j];
-          r_beta[i] = y[i] - allfit[i];
-        }
-        NumericVector w_j(n);
-        for(int i=0; i<n; i++){
-          w_j[i] = di_mod.x[i*di_mod.p + j];
-        }
-        beta[j] = sample_beta_j(n, r_beta, z_, w_j, tau[j], sigma);
-        tau[j] = sample_tau_j_slice(tau[j], beta[j], sigma);
-        for(int i=0; i<n; i++){
-          double bscale = (i < ntrt) ? bscale1 : bscale0;
-          allfit[i]     = allfit[i]     +z_[i]*beta[j]*di_mod.x[i*di_mod.p + j]; //re-add the contributions. 
-          allfit_mod[i] = allfit_mod[i] +z_[i]*beta[j]*di_mod.x[i*di_mod.p + j];
-        }
-      }
-      if(intTreat){
-        for(int k = 0; k < p_int; k++) {
-        // (iVar, jVar) for the pair
-        int iVar = int_pairs[k].first;
-        int jVar = int_pairs[k].second;
+        alpha = sample_alpha(n, r_alpha, z_, sigma, alpha_prior_sd);
         
-        // 2) Remove old contribution of beta_int[k] from allfit[]
         for(int i = 0; i < n; i++){
-          double x_ij = di_mod.x[i*di_mod.p + iVar] * di_mod.x[i*di_mod.p + jVar];
-          allfit[i]   -= z_[i] * beta_int[k] * x_ij;
-          // partial residual for sampling
-          r_beta[i]    = y[i] - allfit[i];
+          allfit[i]     = allfit[i]     +z_[i]*alpha;
+          allfit_mod[i] = allfit_mod[i] +z_[i]*alpha;
         }
         
-        // 3) Sample the new beta_int[k] using a function that accounts for:
-        //    - Prior: N(0, tau_int * tau[iVar] * tau[jVar] * sigma^2)
-        //    - Data likelihood
-        //    (Adapt the same approach you used for sample_beta_j(...))
-        NumericVector w_j(n);
+        for(int j=0; j<p_mod; j++){
+          // partial residual wrt beta_j
+          for(int i=0; i<n; i++){
+            allfit[i]     = allfit[i]     -z_[i]*beta[j]*di_mod.x[i*di_mod.p + j]; //subtract the contributions. 
+            allfit_mod[i] = allfit_mod[i] -z_[i]*beta[j]*di_mod.x[i*di_mod.p + j];
+            r_beta[i] = y[i] - allfit[i];
+          }
+          NumericVector w_j(n);
+          for(int i=0; i<n; i++){
+            w_j[i] = di_mod.x[i*di_mod.p + j];
+          }
+          beta[j] = sample_beta_j(n, r_beta, z_, w_j, tau[j], sigma);
+          tau[j] = sample_tau_j_slice(tau[j], beta[j], sigma);
+          for(int i=0; i<n; i++){
+            double bscale = (i < ntrt) ? bscale1 : bscale0;
+            allfit[i]     = allfit[i]     +z_[i]*beta[j]*di_mod.x[i*di_mod.p + j]; //re-add the contributions. 
+            allfit_mod[i] = allfit_mod[i] +z_[i]*beta[j]*di_mod.x[i*di_mod.p + j];
+          }
+        }
+        if(intTreat){
+          for(int k = 0; k < p_int; k++) {
+            // (iVar, jVar) for the pair
+            int iVar = int_pairs[k].first;
+            int jVar = int_pairs[k].second;
+            
+            // 2) Remove old contribution of beta_int[k] from allfit[]
+            for(int i = 0; i < n; i++){
+              double x_ij = di_mod.x[i*di_mod.p + iVar] * di_mod.x[i*di_mod.p + jVar];
+              allfit[i]   -= z_[i] * beta_int[k] * x_ij;
+              // partial residual for sampling
+              r_beta[i]    = y[i] - allfit[i];
+            }
+            
+            // 3) Sample the new beta_int[k] using a function that accounts for:
+            //    - Prior: N(0, tau_int * tau[iVar] * tau[jVar] * sigma^2)
+            //    - Data likelihood
+            //    (Adapt the same approach you used for sample_beta_j(...))
+            NumericVector w_j(n);
+            for(int i=0; i<n; i++){
+              w_j[i] = di_mod.x[i*di_mod.p + iVar] * di_mod.x[i*di_mod.p + jVar];
+            }
+            beta_int[k] = sample_beta_j(n, r_beta, z_, w_j, std::sqrt(tau_int*tau[iVar]*tau[jVar]), sigma);
+            
+            // 4) Add the *new* contribution back
+            for(int i = 0; i < n; i++){
+              double x_ij = di_mod.x[i*di_mod.p + iVar] * di_mod.x[i*di_mod.p + jVar];
+              allfit[i]   += z_[i] * beta_int[k] * x_ij;
+            }
+          }
+          // Example: Metropolis step for tau_int
+          double currentTauInt = tau_int;
+          double proposedTauInt = R::runif(0.01, 1.0); // sample from Uniform(0.01,1)
+          
+          // Evaluate log posterior ratio = log p(data|tau_int_prop) + log p(tau_int_prop)
+          //                              - (log p(data|tau_int_current) + log p(tau_int_current))
+          // log p(tau_int) = 0 if uniform(0.01,1), ignoring the boundary checks.
+          
+          double logPosteriorCurrent = loglikeTauInt(
+            currentTauInt,
+            beta_int,
+            int_pairs,
+            tau,
+            sigma,
+            false,  // include_treatment_int
+            std::vector<double>(),   // empty beta_int_trt
+            std::vector<double>(),   // empty tau_trt
+            std::vector<std::pair<int,int>>()  // empty int_pairs_trt
+          );
+          
+          double logPosteriorProposed = loglikeTauInt(
+            proposedTauInt,
+            beta_int,
+            int_pairs,
+            tau,
+            sigma,
+            false,
+            std::vector<double>(),
+            std::vector<double>(),
+            std::vector<std::pair<int,int>>()
+          );
+          
+          double logAccept = logPosteriorProposed - logPosteriorCurrent;
+          
+          if(R::runif(0.0, 1.0) < std::exp(logAccept)) {
+            tau_int = proposedTauInt;  
+          } else {
+            tau_int = currentTauInt;
+          }
+          
+        }
+        
         for(int i=0; i<n; i++){
-          w_j[i] = di_mod.x[i*di_mod.p + iVar] * di_mod.x[i*di_mod.p + jVar];
-        }
-        beta_int[k] = sample_beta_j(n, r_beta, z_, w_j, std::sqrt(tau_int*tau[iVar]*tau[jVar]), sigma);
-        
-        // 4) Add the *new* contribution back
-        for(int i = 0; i < n; i++){
-          double x_ij = di_mod.x[i*di_mod.p + iVar] * di_mod.x[i*di_mod.p + jVar];
-          allfit[i]   += z_[i] * beta_int[k] * x_ij;
-        }
-      }
-        // Example: Metropolis step for tau_int
-        double currentTauInt = tau_int;
-        double proposedTauInt = R::runif(0.01, 1.0); // sample from Uniform(0.01,1)
-        
-        // Evaluate log posterior ratio = log p(data|tau_int_prop) + log p(tau_int_prop)
-        //                              - (log p(data|tau_int_current) + log p(tau_int_current))
-        // log p(tau_int) = 0 if uniform(0.01,1), ignoring the boundary checks.
-        
-        double logPosteriorCurrent = loglikeTauInt(
-          currentTauInt,
-          beta_int,
-          int_pairs,
-          tau,
-          sigma,
-          false,  // include_treatment_int
-          std::vector<double>(),   // empty beta_int_trt
-          std::vector<double>(),   // empty tau_trt
-          std::vector<std::pair<int,int>>()  // empty int_pairs_trt
-        );
-        
-        double logPosteriorProposed = loglikeTauInt(
-          proposedTauInt,
-          beta_int,
-          int_pairs,
-          tau,
-          sigma,
-          false,
-          std::vector<double>(),
-          std::vector<double>(),
-          std::vector<std::pair<int,int>>()
-        );
-        
-        double logAccept = logPosteriorProposed - logPosteriorCurrent;
-        
-        if(R::runif(0.0, 1.0) < std::exp(logAccept)) {
-          tau_int = proposedTauInt;  
-        } else {
-          tau_int = currentTauInt;
-        }
-        
-      }
-      
-      for(int i=0; i<n; i++){
           resid[i] = y[i] - allfit[i];}
-      
-      double sigma2 = sample_sigma2_ig(n, resid, sigma2_prior_a, sigma2_prior_b);
-      sigma_lin = std::sqrt(sigma2);
         
-      // Save results of our iteration 
-      if(((iIter>=burn) & (iIter % thin==0)) )  {
+        double sigma2 = sample_sigma2_ig(n, resid, sigma2_prior_a, sigma2_prior_b);
+        sigma_lin = std::sqrt(sigma2); 
+        
+        // Save results of our iteration  
+        if(((iIter>=burn) & (iIter % thin==0)) )  {
           int it = (iIter - burn) / thin;
           alphaOut[it] = alpha;
           sigmaOut[it] = sigma;
           for(int j=0; j<p_mod; j++){
             betaOut(it, j) = beta[j];
             tauOut(it, j)  = tau[j];  
-            }
+          } 
           if(intTreat){
             tau_int_post[it] = tau_int;
             for(int j=0; j<p_int; j++){
               beta_intOut(it, j) = beta_int[j];
-            }
-            
+            } 
           }
+        } 
+      } else {
+        // 1) Sample random momentum ~ N(0,I)
+        if(iIter < burn){
+          // Sample random momentum
+          double log_step = std::log(step_size);
+          arma::vec momentum = arma::randn<arma::vec>(init_param.n_elem);
+          
+          // Compute initial Hamiltonian
+          double H_old = -log_posterior_linked_shrinkage(param, arma::mat(x_mod_.begin(), n, p_mod, false, true), y) + 0.5 * arma::dot(momentum, momentum);
+          
+          // Perform Leapfrog step
+          Rcpp::List leap = leapfrogCpp(param, momentum, std::exp(avg_log_step), 10, arma::mat(x_mod_.begin(), n, p_mod, false, true), y);
+          arma::vec param_new = leap["param"];
+          arma::vec momentum_new = leap["momentum"];
+          
+          // Compute new Hamiltonian
+          double H_new = -log_posterior_linked_shrinkage(param_new, arma::mat(x_mod_.begin(), n, p_mod, false, true), y) + 0.5 * arma::dot(momentum_new, momentum_new);
+          
+          // Compute acceptance probability
+          double alpha = std::min(1.0, std::exp(H_old - H_new));
+          
+          // Adapt step size
+          H_bar = (1 - 1.0 / (iIter + t0)) * H_bar + (1.0 / (iIter + t0)) * (target_accept - alpha);
+          log_step = mu - (std::sqrt(iIter) / ksi) * H_bar;
+          double eta = std::pow(iIter, -kappa);
+          avg_log_step = eta * log_step + (1 - eta) * avg_log_step;
+        } else {
+        arma::vec momentum = arma::randn<arma::vec>(init_param.size());
+        
+        // 2) Compute initial Hamiltonian
+        double H_old = -log_posterior_linked_shrinkage(param, arma::mat(x_mod_.begin(), n, p_mod, false, true), y)+ 0.5 * arma::dot(momentum, momentum);
+         
+        // 3) Perform Leapfrog integration
+        Rcpp::List leap = leapfrogCpp(param, momentum, step_size, exp(avg_log_step),arma::mat(x_mod_.begin(), n, p_mod, false, true), y);
+        arma::vec param_new = leap["param"];
+        arma::vec momentum_new = leap["momentum"];
+         
+        // 4) Compute new Hamiltonian
+        double H_new = -log_posterior_linked_shrinkage(param_new,arma::mat(x_mod_.begin(), n, p_mod, false, true), y)
+          + 0.5 * arma::dot(momentum_new, momentum_new);
+         
+        // 5) Metropolis accept/reject
+        double log_accept_ratio = H_old - H_new;
+        double u = R::runif(0.0, 1.0);
+        if (std::log(u) < log_accept_ratio) {
+          // Accept move
+          param = param_new;
+          acceptance++;
+        } 
+        if(((iIter>=burn) & (iIter % thin==0)) )  {
+          int it = (iIter - burn) / thin;
+          samples.row(it) = param.t();
+        }
         }
         
-        
-      // for(size_t iTreeMod=0;iTreeMod<ntree_mod;iTreeMod++) {
-      //   logger.log("==================================");
-      //   Rprintf(logBuff, "Updating Moderate Tree: %d of %d",iTreeMod + 1 , ntree_mod);
-      //   logger.log(logBuff);
-      //   logger.log("==================================");
-      //   logger.startContext();
-      //   
-      //   
-      //   logger.log("Attempting to Print Tree Pre Update \n");
-      //   if(verbose_itr && printTrees){
-      //     t_mod[iTreeMod].pr(xi_mod);
-      //     Rcout << "\n";
-      //   }
-      //   
-      //   fit(t_mod[iTreeMod],
-      //       xi_mod,
-      //       di_mod,
-      //       ftemp);
-      //   
-      //   logger.log("Attempting to Print Tree Post first call to fit");
-      //   if(verbose_itr && printTrees){
-      //     t_mod[iTreeMod].pr(xi_mod);
-      //     Rcout << "\n";
-      //   }
-      //   
-      //   for(size_t k=0;k<n;k++) {
-      //     if(ftemp[k] != ftemp[k]) {
-      //       Rcout << "moderator tree " << iTreeMod <<" obs "<< k<<" "<< endl;
-      //       Rcout << t_mod[iTreeMod] << endl;
-      //       stop("nan in ftemp");
-      //     }
-      //     double bscale = (k<ntrt) ? bscale1 : bscale0;
-      //     allfit[k] = allfit[k]-bscale*ftemp[k];
-      //     allfit_mod[k] = allfit_mod[k]-bscale*ftemp[k];
-      //     r_mod[k] = (y[k]-allfit[k])/bscale;
-      //   }
-      //   logger.log("Starting Birth / Death Processing");
-      //   logger.startContext();
-      //   bd(t_mod[iTreeMod],
-      //      xi_mod,
-      //      di_mod,
-      //      weight_het,
-      //      pi_mod,
-      //      gen,
-      //      logger);
-      //   logger.stopContext();
-      //   
-      //   logger.log("Attempting to Print Tree  Post bd \n");
-      //   if(verbose_itr && printTrees){
-      //     t_mod[iTreeMod].pr(xi_mod);
-      //     Rcout << "\n";
-      //   }
-      //   
-      //   if (verbose_itr && printTrees){
-      //     logger.log("Printing Status of Fit");
-      //     
-      //     logger.getVectorHead(z_, logBuff);
-      //     Rcout << "\n          z : " <<  logBuff << "\n";
-      //     
-      //     logger.getVectorHead(y, logBuff);
-      //     Rcout << "          y : " <<  logBuff << "\n";
-      //     
-      //     logger.getVectorHead(allfit, logBuff);
-      //     Rcout << "Fit - Tree  : " <<  logBuff << "\n";
-      //     
-      //     logger.getVectorHead(r_mod, logBuff);
-      //     Rcout << "     r_mod  : " <<  logBuff << "\n\n";
-      //     
-      //     Rcout <<" MScale: " << mscale << "\n";
-      //     
-      //     Rcout <<" bscale0 : " << bscale0 << "\n";
-      //     
-      //     Rcout <<" bscale1 : " << bscale1 << "\n\n";
-      //     
-      //   }
-      //   logger.log("Starting To Draw Mu");
-      //   logger.startContext();
-      //   drmu(t_mod[iTreeMod],
-      //        xi_mod,
-      //        di_mod,
-      //        pi_mod,
-      //        weight_het,
-      //        gen);
-      //   logger.stopContext();
-      //   
-      //   
-      //   
-      //   logger.log("Attempting to Print Tree Post drmuhet \n");
-      //   if(verbose_itr && printTrees){
-      //     t_mod[iTreeMod].pr(xi_mod);
-      //     Rcout << "\n";
-      //   }
-      //   
-      //   fit(t_mod[iTreeMod],
-      //       xi_mod,
-      //       di_mod,
-      //       ftemp);
-      //   
-      //   for(size_t k=0;k<ntrt;k++) {
-      //     allfit[k] += bscale1*ftemp[k];
-      //     allfit_mod[k] += bscale1*ftemp[k];
-      //   }
-      //   for(size_t k=ntrt;k<n;k++) {
-      //     allfit[k] += bscale0*ftemp[k];
-      //     allfit_mod[k] += bscale0*ftemp[k];
-      //   }
-      //   
-      //   logger.log("Attempting to Print Tree Post second call to fit");
-      //   
-      //   if(verbose_itr && printTrees){
-      //     t_mod[iTreeMod].pr(xi_mod);
-      //     Rcout << "\n";
-      //   }
-      //   logger.stopContext();
-      //   
-      // } // end tree lop
+      }
+      
       
       logger.setLevel(verbose_itr);
       
@@ -1102,9 +1067,15 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
         restemp = y[k]-allfit[k];
         rss += w[k]*restemp*restemp;
       }
-      sigma = sqrt((nu*lambda + rss)/gen.chi_square(nu+n));
+      if(!hamiltonian){
+        sigma = sqrt((nu*lambda + rss)/gen.chi_square(nu+n));
+      } else {
+        sigma = sqrt(std::exp(init_param[p_mod + p_int + p_mod + 2]));
+      }
       pi_con.sigma = sigma/fabs(mscale);
       pi_mod.sigma = sigma; // Is this another copy paste Error?
+      
+      sigma = sqrt(std::exp(init_param[p_mod + p_int + p_mod + 2]));
       
       if( ((iIter>=burn) & (iIter % thin==0)) )  {
         if(not treef_con_name.empty()){
@@ -1174,6 +1145,16 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
     if(not treef_con_name.empty()){
       treef_con.close();
       // treef_mod.close();
+    }
+    
+    if(hamiltonian){
+      alphaOut = samples.col(0);
+      betaOut = wrap(samples.cols(1,p_mod));
+      beta_intOut = wrap(samples.cols(p_mod + 1, p_mod + p_int));
+      tauOut = wrap(samples.cols(p_mod + p_int + 1, p_mod + p_int + p_mod));
+      tau_int_post = samples.col(p_mod + p_int + p_mod + 1);
+      sigma_post = samples.col(p_mod + p_int + p_mod + 2);
+      
     }
     
     return(List::create(_["yhat_post"] = yhat_post, _["m_post"] = m_post, _["b_post"] = b_post,

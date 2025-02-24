@@ -62,7 +62,7 @@ inline double transform_tau_int(double w) {
 
 /////////////////////////////////////////////////////////////////////////////////////
 // 2) log_posterior_linked_shrinkage
-//    * includes likelihood + all priors *exactly* as in the discussion:
+//    * includes likelihood + all priors as in the discussion:
 //
 // likelihood: y_i ~ Normal(eta_i, sigma^2)
 //   => sum_i [-1/2 log(2pi) - 1/2 log(sigma^2) - (y_i - eta_i)^2/(2 sigma^2)]
@@ -112,7 +112,6 @@ double log_posterior_linked_shrinkage(const arma::vec &param,
   double tau_int = transform_tau_int(w_tau_int);  // **Ensures τ_int ∈ (0.01, 1)**
   double sigma2 = exp(log_sigma);  // **Ensures σ² > 0**
   
-  // 🚨 Prevent extreme values
   if (sigma2 < 1e-10) sigma2 = 1e-10;  // Avoid division by zero
   tau_vec = clamp(tau_vec, 1e-10, 1e10);  // Avoid underflow/overflow
   
@@ -341,5 +340,37 @@ arma::vec grad_log_posterior_linked_shrinkage(const arma::vec &param,
    
    return grad;
  }
+
+// [[Rcpp::export]]
+Rcpp::List leapfrogCpp(
+    arma::vec param,
+    arma::vec momentum,
+    double step_size,
+    int num_steps,
+    const arma::mat &X,
+    const arma::vec &y
+) {
+  // First half-step for momentum
+  momentum = momentum + 0.5 * step_size * grad_log_posterior_linked_shrinkage(param, X, y);
+  
+  // Full Leapfrog steps
+  for (int i = 0; i < num_steps; i++) {
+    // Full position step
+    param = param + step_size * momentum;
+    
+    // Full momentum step (except for last)
+    if (i != num_steps - 1) {
+      momentum = momentum + step_size * grad_log_posterior_linked_shrinkage(param, X, y);
+    }
+  }
+  
+  // Final half-step for momentum
+  momentum = momentum + 0.5 * step_size * grad_log_posterior_linked_shrinkage(param, X, y);
+  
+  return Rcpp::List::create(
+    Named("param") = param,
+    Named("momentum") = momentum
+  );
+}
 
 

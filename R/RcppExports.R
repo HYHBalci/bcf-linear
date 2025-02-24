@@ -9,8 +9,8 @@ bcfoverparRcppClean <- function(y_, z_, w_, x_con_, x_mod_, x_con_info_list, x_m
     .Call('_bcf_bcfoverparRcppClean', PACKAGE = 'bcf', y_, z_, w_, x_con_, x_mod_, x_con_info_list, x_mod_info_list, random_des, random_var, random_var_ix, random_var_df, burn, nd, thin, ntree_mod, ntree_con, lambda, nu, con_sd, mod_sd, con_alpha, con_beta, mod_alpha, mod_beta, treef_con_name_, treef_mod_name_, status_interval, RJ, use_mscale, use_bscale, b_half_normal, trt_init, verbose_sigma, no_output)
 }
 
-bcfoverparRcppCleanLinear <- function(y_, z_, w_, x_con_, x_mod_, x_con_info_list, x_mod_info_list, random_des, random_var, random_var_ix, random_var_df, burn, nd, thin, ntree_mod, ntree_con, lambda, nu, con_sd, mod_sd, con_alpha, con_beta, mod_alpha, mod_beta, treef_con_name_, treef_mod_name_, status_interval = 100L, RJ = FALSE, use_mscale = TRUE, use_bscale = TRUE, b_half_normal = TRUE, trt_init = 0.0, verbose_sigma = FALSE, no_output = FALSE, intTreat = TRUE) {
-    .Call('_bcf_bcfoverparRcppCleanLinear', PACKAGE = 'bcf', y_, z_, w_, x_con_, x_mod_, x_con_info_list, x_mod_info_list, random_des, random_var, random_var_ix, random_var_df, burn, nd, thin, ntree_mod, ntree_con, lambda, nu, con_sd, mod_sd, con_alpha, con_beta, mod_alpha, mod_beta, treef_con_name_, treef_mod_name_, status_interval, RJ, use_mscale, use_bscale, b_half_normal, trt_init, verbose_sigma, no_output, intTreat)
+bcfoverparRcppCleanLinear <- function(y_, z_, w_, x_con_, x_mod_, x_con_info_list, x_mod_info_list, random_des, random_var, random_var_ix, random_var_df, burn, nd, thin, ntree_mod, ntree_con, lambda, nu, con_sd, mod_sd, con_alpha, con_beta, mod_alpha, mod_beta, treef_con_name_, treef_mod_name_, status_interval = 100L, RJ = FALSE, use_mscale = TRUE, use_bscale = TRUE, b_half_normal = TRUE, trt_init = 0.0, verbose_sigma = FALSE, no_output = FALSE, intTreat = TRUE, hamiltonian = FALSE) {
+    .Call('_bcf_bcfoverparRcppCleanLinear', PACKAGE = 'bcf', y_, z_, w_, x_con_, x_mod_, x_con_info_list, x_mod_info_list, random_des, random_var, random_var_ix, random_var_df, burn, nd, thin, ntree_mod, ntree_con, lambda, nu, con_sd, mod_sd, con_alpha, con_beta, mod_alpha, mod_beta, treef_con_name_, treef_mod_name_, status_interval, RJ, use_mscale, use_bscale, b_half_normal, trt_init, verbose_sigma, no_output, intTreat, hamiltonian)
 }
 
 bcflineartwo <- function(y_, z_, w_, x_con_, x_mod_, x_con_info_list, x_mod_info_list, random_des, random_var, random_var_ix, random_var_df, burn, nd, thin, ntree_mod, ntree_con, lambda, nu, con_sd, mod_sd, con_alpha, con_beta, mod_alpha, mod_beta, treef_con_name_, treef_mod_name_, status_interval = 100L, RJ = FALSE, use_mscale = TRUE, use_bscale = TRUE, b_half_normal = TRUE, trt_init = 0.0, verbose_sigma = FALSE, no_output = FALSE, tian = FALSE) {
@@ -31,6 +31,18 @@ sample_alpha <- function(N, r_alpha, z_, sigma, alpha_prior_sd = 10.0) {
 
 sample_sigma2_ig <- function(N, resid, shape_prior = 1.0, rate_prior = 0.001) {
     .Call('_bcf_sample_sigma2_ig', PACKAGE = 'bcf', N, resid, shape_prior, rate_prior)
+}
+
+log_posterior_linked_shrinkage <- function(param, X, y) {
+    .Call('_bcf_log_posterior_linked_shrinkage', PACKAGE = 'bcf', param, X, y)
+}
+
+grad_log_posterior_linked_shrinkage <- function(param, X, y) {
+    .Call('_bcf_grad_log_posterior_linked_shrinkage', PACKAGE = 'bcf', param, X, y)
+}
+
+leapfrogCpp <- function(param, momentum, step_size, num_steps, X, y) {
+    .Call('_bcf_leapfrogCpp', PACKAGE = 'bcf', param, momentum, step_size, num_steps, X, y)
 }
 
 test_visibility <- function() {
