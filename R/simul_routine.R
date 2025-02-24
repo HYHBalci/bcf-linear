@@ -39,11 +39,8 @@ for(het in heter){
                               use_muscale = FALSE,
                               do_parallel = TRUE,
                               intTreat = TRUE)
-        # Define the file name for saving the result
-        file_name <- paste0("bcf_out_het_", het, "_lin_", lin, "_n_", n_obser, "_sim_", i, ".RData")
-        
         # Save the bcf object
-        save(bcf_out, file = file_name)
+        save(bcf_out, file = "Singular.Rdata")
         flush.console()
       }
     }

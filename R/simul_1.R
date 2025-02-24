@@ -1,7 +1,7 @@
 
 generate_data <- function(n = 250,
                           is_te_hetero = FALSE,  # toggles homogeneous vs heterogeneous
-                          is_mu_nonlinear = TRUE, seed = 1848) {
+                          is_mu_nonlinear = TRUE, seed = 1848,RCT = F) {
   set.seed(seed)
   # -- 1. Generate covariates --
   x1 <- rnorm(n, mean=0, sd=1)
@@ -55,8 +55,12 @@ generate_data <- function(n = 250,
   # standard Normal CDF:
   Phi <- function(z) pnorm(z, mean=0, sd=1)
   
-  pi_x <- 0.8 * Phi( (3*mu)/s - 0.5*x1 ) + 0.05 + (u_i / 10)
-  
+  if(RCT){
+    pi_x <- rep(0.5,n)
+  } else{
+    pi_x <- 0.8 * Phi( (3*mu)/s - 0.5*x1 ) + 0.05 + (u_i / 10)
+  }
+
   # clamp or ensure pi_x in [0,1], just in case
   pi_x <- pmin(pmax(pi_x, 0), 1)
   
