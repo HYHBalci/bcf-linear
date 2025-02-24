@@ -112,6 +112,6 @@ for (i in 1:9) {
 }
 
 library(coda)
-sample_mcmc <- as.mcmc(samples)
+sample_mcmc <- as.mcmc(samples[-(1:500), ,drop=FALSE])
 traceplot(sample_mcmc)
 effectiveSize(sample_mcmc)
