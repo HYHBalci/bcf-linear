@@ -239,7 +239,7 @@ bcf_linear <- function(y, z, x_control, x_moderate=x_control, pihat, w = NULL,
                 save_tree_directory = '.',
                 log_file=file.path('.',sprintf('bcf_log_%s.txt',format(Sys.time(), "%Y%m%d_%H%M%S"))),
                 nu = 3, lambda = NULL, sigq = .9, sighat = NULL,
-                include_pi = "control", use_muscale=TRUE, use_tauscale=TRUE, verbose=TRUE, do_parallel = TRUE, intTreat = TRUE
+                include_pi = "control", use_muscale=TRUE, use_tauscale=TRUE, verbose=TRUE, do_parallel = TRUE, intTreat = TRUE, hamiltonian = F
 ) {
   
   start_time <- proc.time()
@@ -362,7 +362,7 @@ bcf_linear <- function(y, z, x_control, x_moderate=x_control, pihat, w = NULL,
                                        status_interval = update_interval,
                                        use_mscale = use_muscale, use_bscale = use_bscale, 
                                        b_half_normal = TRUE, verbose_sigma=verbose, 
-                                       no_output=no_output, intTreat = intTreat)
+                                       no_output=no_output, intTreat = intTreat, hamiltonian = hamiltonian)
     
     
     chain_data <- fitbcf
