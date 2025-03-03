@@ -239,7 +239,8 @@ bcf_linear <- function(y, z, x_control, x_moderate=x_control, pihat, w = NULL,
                 save_tree_directory = '.',
                 log_file=file.path('.',sprintf('bcf_log_%s.txt',format(Sys.time(), "%Y%m%d_%H%M%S"))),
                 nu = 3, lambda = NULL, sigq = .9, sighat = NULL,
-                include_pi = "control", use_muscale=TRUE, use_tauscale=TRUE, verbose=TRUE, do_parallel = TRUE, intTreat = TRUE, hamiltonian = F
+                include_pi = "control", use_muscale=TRUE, use_tauscale=TRUE, verbose=TRUE, do_parallel = TRUE, intTreat = TRUE, hamiltonian = F,
+                step_size = 0.005, num_of_steps = 10, sparse = sparse 
 ) {
   
   start_time <- proc.time()
@@ -307,6 +308,10 @@ bcf_linear <- function(y, z, x_control, x_moderate=x_control, pihat, w = NULL,
   muy = stats::weighted.mean(y, w)
   yscale = (y-muy)/sdy
   
+  if(sparse){
+    base_control = 0.1
+    base_power = 4.0
+  }
   
   if(is.null(lambda)) {
     if(is.null(sighat)) {
@@ -362,7 +367,7 @@ bcf_linear <- function(y, z, x_control, x_moderate=x_control, pihat, w = NULL,
                                        status_interval = update_interval,
                                        use_mscale = use_muscale, use_bscale = use_bscale, 
                                        b_half_normal = TRUE, verbose_sigma=verbose, 
-                                       no_output=no_output, intTreat = intTreat, hamiltonian = hamiltonian)
+                                       no_output=no_output, intTreat = intTreat, hamiltonian = hamiltonian, step_size = step_size, num_of_steps = num_of_steps, sparse = sparse)
     
     
     chain_data <- fitbcf
@@ -383,15 +388,15 @@ bcf_linear <- function(y, z, x_control, x_moderate=x_control, pihat, w = NULL,
     tau_post = sdy*fitbcf$b_post[,order(perm)]
     
     mu_post  = muy + sdy*(Tc*fitbcf$msd + Tm*fitbcf$b0)
-    
+    acceptance_rate = fitbcf$acceptance_rate
     Beta <- sdy*fitbcf$Beta
     beta_int <- sdy*fitbcf$beta_int
     alpha <- fitbcf$alpha
-    
+    tau_int <- fitbcf$tau_int
     list(sigma = sdy*fitbcf$sigma,
          yhat = muy + sdy*fitbcf$yhat_post[,order(perm)],
          sdy = sdy,
-         con_sd = con_sd,
+         con_sd = con_sd, 
          mod_sd = mod_sd,
          muy = muy,
          mu  = mu_post,
@@ -406,7 +411,8 @@ bcf_linear <- function(y, z, x_control, x_moderate=x_control, pihat, w = NULL,
          has_file_output=!no_output,
          Beta = Beta,
          beta_int = beta_int,
-         alpha = alpha
+         alpha = alpha,
+         tau_int = tau_int
     )
     
   }} else {
