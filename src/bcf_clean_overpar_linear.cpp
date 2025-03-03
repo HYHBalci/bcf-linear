@@ -50,15 +50,18 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
                          int status_interval=100,
                          bool RJ= false, bool use_mscale=true, bool use_bscale=true, bool b_half_normal=true,
                          double trt_init = 0.0, bool verbose_sigma=false, 
-                         bool no_output=false, bool intTreat = true, bool hamiltonian = false)
+                         bool no_output=false, bool intTreat = true, bool hamiltonian = false,
+                         double step_size = 0.005, int num_of_steps = 10, bool sparse = false)
 {
   R_FlushConsole(); // Flush the console so to not overload it with all the messages printed. 
-  bool randeff = true;
+  bool randeff = false;
   if(random_var_ix.n_elem == 1) {
     randeff = false;
   } 
   
   if(randeff) Rcout << "Using random effects." << std::endl;
+  
+  Rcout << 'Alo?' << std::endl;
   
   std::ofstream treef_con;
   // std::ofstream treef_mod;
@@ -171,6 +174,20 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
       x_mod.push_back(*it);
     }
     size_t p_mod = x_mod.size()/n;
+    Rcout << "x_mod_ size: " << x_mod_.size() << ", expected: " << (n * p_mod) << std::endl;
+    for (size_t i = 0; i < std::min<size_t>(5, n); i++) {
+      Rcout << "x_mod_[" << i << "] = " << x_mod_[i] << std::endl;
+    }
+    
+    // arma::mat X(x_mod_.begin(), n, p_mod, false, true);
+    // 
+    // Rcout << "X dimensions: " << X.n_rows << " x " << X.n_cols << std::endl;
+    // for (size_t i = 0; i < n; i++) {
+    //   for (size_t j = 0; j < p_mod; j++) {
+    //     Rcout << "X(" << i << "," << j << ") = " << X(i, j) << "  ";
+    //   } 
+    //   Rcout << std::endl;
+    // }
     
     Rcout << "Using " << p_mod << " potential effect moderators." << std::endl;
     
@@ -210,9 +227,15 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
     
     double mscale_prec = 1.0;
     double mscale = 1.0;
-    double delta_con = 1.0;
-    double delta_mod = 1.0;
-    
+    double delta_con;
+    double delta_mod;
+    if(sparse == false){
+      delta_con = 1.0;
+      delta_mod = 1.0;
+    } else {
+      delta_con = 2.0;
+      delta_mod = 2.0;
+    }
     double alpha_prior_sd  = 10.0; //Alpha prior variance for linear part 
     double sigma2_prior_a = 1.0;
     double sigma2_prior_b = 0.001;
@@ -317,7 +340,13 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
     
     // Initialize for the interaction terms
     NumericVector tau_int_post(nd);
-    int p_int = (p_mod * (p_mod + 1)) / 2;
+    
+    int p_int;
+    if(!hamiltonian){
+      p_int = (p_mod * (p_mod + 1)) / 2;
+    } else {
+      p_int = (p_mod * (p_mod - 1)) / 2;
+    }
     NumericMatrix beta_intOut(nd, p_int);
     std::vector<std::pair<int,int>> int_pairs;
     int_pairs.reserve(p_int);
@@ -328,11 +357,10 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
     }
     // acceptance counter if there is hamiltonian MCMC.
     
-    int acceptance = 0;
-    double step_size = 1.0;      // Initial guess for the stepsize
+    int acceptance = 0;     // Initial guess for the stepsize
     double target_accept = 0.65; // Target acceptance rate
     double H_bar = 0.0;
-    double avg_log_step = 0.0;   // Running average of log(step_size)
+    double avg_log_step = -9;   // Running average of log(step_size)
     double mu = std::log(10.0 * step_size); // Bias term
     double ksi = 0.05;         // Controls stability of adaptation
     double t0 = 10.0;            // Initial slow adaptation
@@ -343,9 +371,9 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
     int total_size = 1 + p_mod + p_int + p_mod + 1 + 1;  // Total number of parameters
     arma::vec init_param(total_size, arma::fill::zeros);
     init_param[0] = 1;
-    init_param.subvec(1, p_mod) = arma::vec(n, arma::fill::zeros);
-    init_param.subvec(p_mod + 1, p_mod + p_int) = arma::vec(n, arma::fill::zeros);
-    init_param.subvec(p_mod + p_int+ 1, p_mod + p_int + p_mod) = arma::vec(n, arma::fill::ones);
+    init_param.subvec(1, p_mod) = arma::vec(p_mod, arma::fill::zeros);
+    init_param.subvec(p_mod + 1, p_mod + p_int) = arma::vec(p_int, arma::fill::zeros);
+    init_param.subvec(p_mod + p_int + 1, p_mod + p_int + p_mod) = arma::vec(p_mod, arma::fill::ones);
     init_param[p_mod + p_int + p_mod + 1] = 0.5;
     init_param[p_mod + p_int + p_mod + 2] = 1;
     arma::vec param = init_param;
@@ -717,46 +745,66 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
           }
         } 
       } else {
-        // 1) Sample random momentum ~ N(0,I)
-        if(iIter < burn){
-          // Sample random momentum
-          double log_step = std::log(step_size);
-          arma::vec momentum = arma::randn<arma::vec>(init_param.n_elem);
-          
-          // Compute initial Hamiltonian
-          double H_old = -log_posterior_linked_shrinkage(param, arma::mat(x_mod_.begin(), n, p_mod, false, true), y) + 0.5 * arma::dot(momentum, momentum);
-          
-          // Perform Leapfrog step
-          Rcpp::List leap = leapfrogCpp(param, momentum, std::exp(avg_log_step), 10, arma::mat(x_mod_.begin(), n, p_mod, false, true), y);
-          arma::vec param_new = leap["param"];
-          arma::vec momentum_new = leap["momentum"];
-          
-          // Compute new Hamiltonian
-          double H_new = -log_posterior_linked_shrinkage(param_new, arma::mat(x_mod_.begin(), n, p_mod, false, true), y) + 0.5 * arma::dot(momentum_new, momentum_new);
-          
-          // Compute acceptance probability
-          double alpha = std::min(1.0, std::exp(H_old - H_new));
-          
-          // Adapt step size
-          H_bar = (1 - 1.0 / (iIter + t0)) * H_bar + (1.0 / (iIter + t0)) * (target_accept - alpha);
-          log_step = mu - (std::sqrt(iIter) / ksi) * H_bar;
-          double eta = std::pow(iIter, -kappa);
-          avg_log_step = eta * log_step + (1 - eta) * avg_log_step;
-        } else {
+        for(int i=0; i<n; i++){
+          allfit[i]     = allfit[i] - allfit_mod[i];
+          resid[i] = y[i] - allfit[i];
+        }
+        // if(iIter < burn){
+        //   // Sample random momentum
+        //   int i = iIter + 1;
+        //   double log_step = std::log(step_size);
+        //   arma::vec momentum = arma::randn<arma::vec>(init_param.n_elem);
+        // 
+        //   // Compute initial Hamiltonian
+        //   Rcout << "Calling LL function..."<< std::endl;
+        // 
+        //   double H_old = -log_posterior_linked_shrinkage(param, arma::mat(x_mod_.begin(), n, p_mod, false, true), resid) + 0.5 * arma::dot(momentum, momentum);
+        //   Rcout << "H_OLD "<< H_old << std::endl;
+        //   // Perform Leapfrog step
+        //   Rcout << "Calling Leapfrog function..."<< std::endl;
+        //   Rcout << exp(avg_log_step)<< std::endl;
+        //   Rcpp::List leap = leapfrogCpp(param, momentum, std::exp(avg_log_step), 10, arma::mat(x_mod_.begin(), n, p_mod, false, true), resid);
+        //   arma::vec param_new = leap["param"];
+        //   // Rcout << "Param New:  "<< param_new << std::endl;
+        //   arma::vec momentum_new = leap["momentum"];
+        // 
+        //   // Compute new Hamiltonian
+        //   Rcout << "Log posterior called again"<< std::endl;
+        //   double H_new = -log_posterior_linked_shrinkage(param_new, arma::mat(x_mod_.begin(), n, p_mod, false, true), resid) + 0.5 * arma::dot(momentum_new, momentum_new);
+        //   Rcout << "H_new "<< H_new<< std::endl;
+        //   // Compute acceptance probability
+        //   double alpha_cal = std::min(1.0, std::exp(H_old - H_new));
+        //   Rcout << "alpha_cal "<< alpha_cal << std::endl;
+        //   // Adapt step size
+        //   H_bar = (1 - 1.0 / (i + t0)) * H_bar + (1.0 / (i + t0)) * (target_accept - alpha_cal);
+        //   Rcout << "H_bar"<< alpha_cal << std::endl;
+        //   log_step = mu - (std::sqrt(i) / ksi) * H_bar;
+        //   log_step = std::max(std::log(1e-4), std::min(log_step, std::log(0.01)));
+        //   Rcout << "log_step"<< log_step << std::endl;
+        //   double eta = std::pow(i, -kappa);
+        //   Rcout << "eta"<< eta << std::endl;
+        //   avg_log_step = eta * log_step + (1 - eta) * avg_log_step;
+        //   avg_log_step = std::max(std::log(1e-4), std::min(avg_log_step, std::log(1.0)));
+        //   for(int i=0; i<n; i++){
+        //     allfit[i]     = allfit[i] + allfit_mod[i];
+        //     
+        //   }
+        // } else { 
         arma::vec momentum = arma::randn<arma::vec>(init_param.size());
         
         // 2) Compute initial Hamiltonian
-        double H_old = -log_posterior_linked_shrinkage(param, arma::mat(x_mod_.begin(), n, p_mod, false, true), y)+ 0.5 * arma::dot(momentum, momentum);
-         
+
+        double H_old = -log_posterior_linked_shrinkage(param, arma::mat(x_mod_.begin(), n, p_mod, false, true), resid)+ 0.5 * arma::dot(momentum, momentum);
         // 3) Perform Leapfrog integration
-        Rcpp::List leap = leapfrogCpp(param, momentum, step_size, exp(avg_log_step),arma::mat(x_mod_.begin(), n, p_mod, false, true), y);
+        Rcpp::List leap = leapfrogCpp(param, momentum, step_size, num_of_steps ,arma::mat(x_mod_.begin(), n, p_mod, false, true), resid);
+      
         arma::vec param_new = leap["param"];
         arma::vec momentum_new = leap["momentum"];
-         
+
         // 4) Compute new Hamiltonian
-        double H_new = -log_posterior_linked_shrinkage(param_new,arma::mat(x_mod_.begin(), n, p_mod, false, true), y)
+        double H_new = -log_posterior_linked_shrinkage(param_new,arma::mat(x_mod_.begin(), n, p_mod, false, true), resid)
           + 0.5 * arma::dot(momentum_new, momentum_new);
-         
+        Rcout << "H_new"<< H_new << std::endl;
         // 5) Metropolis accept/reject
         double log_accept_ratio = H_old - H_new;
         double u = R::runif(0.0, 1.0);
@@ -769,8 +817,28 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
           int it = (iIter - burn) / thin;
           samples.row(it) = param.t();
         }
-        }
         
+        for(int i=0; i<n; i++){
+          // 1) Start with intercept
+          allfit_mod[i] = param(0);
+          
+          // 2) Add main effects
+          for(int j = 0; j < p_mod; j++){
+            double x_ij = x_mod[i * p_mod + j];  
+            allfit_mod[i] += param(1 + j) * x_ij;
+          }
+          int idx = 0;
+          for(int k = 0; k < (int)int_pairs.size(); k++){
+            int colA = int_pairs[k].first;
+            int colB = int_pairs[k].second;
+            
+            double x_ij = x_mod[i * p_mod + colA] * x_mod[i * p_mod + colB];
+            allfit_mod[i] += param(p_mod + 1 + idx) * x_ij;
+            idx++;
+          }
+          
+          allfit[i]     = allfit[i] + allfit_mod[i];
+        }
       }
       
       
@@ -1070,12 +1138,12 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
       if(!hamiltonian){
         sigma = sqrt((nu*lambda + rss)/gen.chi_square(nu+n));
       } else {
-        sigma = sqrt(std::exp(init_param[p_mod + p_int + p_mod + 2]));
+        sigma = sqrt(std::exp(param[p_mod + p_int + p_mod + 2]));
       }
       pi_con.sigma = sigma/fabs(mscale);
       pi_mod.sigma = sigma; // Is this another copy paste Error?
       
-      sigma = sqrt(std::exp(init_param[p_mod + p_int + p_mod + 2]));
+      // sigma = sqrt(std::exp(init_param[p_mod + p_int + p_mod + 2]));
       
       if( ((iIter>=burn) & (iIter % thin==0)) )  {
         if(not treef_con_name.empty()){
@@ -1159,6 +1227,6 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
     
     return(List::create(_["yhat_post"] = yhat_post, _["m_post"] = m_post, _["b_post"] = b_post,
                         _["sigma"] = sigma_post, _["msd"] = msd_post, _["bsd"] = bsd_post, _["b0"] = b0_post, _["b1"] = b1_post,
-                        _["gamma"] = gamma_post, _["random_var_post"] = random_var_post, _["Beta"] = betaOut, _["tau"] = tauOut, _["alpha"] = alphaOut, _["tau_int"] = tau_int_post, _["beta_int"] = beta_intOut
+                        _["gamma"] = gamma_post, _["random_var_post"] = random_var_post, _["Beta"] = betaOut, _["tau"] = tauOut, _["alpha"] = alphaOut, _["tau_int"] = tau_int_post, _["beta_int"] = beta_intOut, _["acceptance_rate"] = acceptance/nd
     ));
 }

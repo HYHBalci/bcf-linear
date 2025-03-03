@@ -59,7 +59,6 @@ static arma::vec compute_eta(const arma::vec &param,
 inline double transform_tau_int(double w) {
     return 0.01 + (0.99 * exp(w)) / (1 + exp(w));
 }
-
 /////////////////////////////////////////////////////////////////////////////////////
 // 2) log_posterior_linked_shrinkage
 //    * includes likelihood + all priors as in the discussion:
@@ -88,6 +87,7 @@ double log_posterior_linked_shrinkage(const arma::vec &param,
                                       const arma::mat &X,
                                       const arma::vec &y)
 {
+
   int n = X.n_rows;
   int p = X.n_cols;
   int pC2 = p * (p - 1) / 2;
@@ -107,7 +107,6 @@ double log_posterior_linked_shrinkage(const arma::vec &param,
   double w_tau_int = param[end_tau + 1];
   double log_sigma = param[end_tau + 2];
   
-  // ✅ Transform back to enforce positivity
   arma::vec tau_vec = exp(log_tau_vec);  // **Ensures τ_j > 0**
   double tau_int = transform_tau_int(w_tau_int);  // **Ensures τ_int ∈ (0.01, 1)**
   double sigma2 = exp(log_sigma);  // **Ensures σ² > 0**
@@ -204,17 +203,17 @@ arma::vec grad_log_posterior_linked_shrinkage(const arma::vec &param,
    double w_tau_int = param[end_tau + 1];
    double log_sigma = param[end_tau + 2];
    
-   // ✅ Transform back
    arma::vec tau_vec = exp(log_tau_vec);  // **Ensures τ_j > 0**
    double tau_int = 0.01 + (0.99 * exp(w_tau_int)) / (1 + exp(w_tau_int));  // **Ensures τ_int ∈ (0.01, 1)**
    double sigma2 = exp(log_sigma);  // **Ensures σ² > 0**
    
-   // 🚨 Prevent extreme values
+   // Prevent extreme values
    if (sigma2 < 1e-10) sigma2 = 1e-10;
    tau_vec = clamp(tau_vec, 1e-10, 1e10);
    
    // Compute residuals
    arma::vec resid = compute_residual(param, X, y);
+   
    double ssr = arma::dot(resid, resid);
    
    // Initialize gradient vector
@@ -230,10 +229,8 @@ arma::vec grad_log_posterior_linked_shrinkage(const arma::vec &param,
      double bj = beta_main[j];
      double tj = tau_vec[j];
      
-     // ✅ Gradient from likelihood: ∂ log p(y|β) / ∂ β_j
      double grad_beta = arma::dot(resid, X.col(j)) / sigma2;
      
-     // ✅ Gradient from prior: ∂ log p(β_j) / ∂ β_j
      grad_beta -= bj / (sigma2 * tj * tj);
      
      grad[1 + j] = grad_beta;
@@ -248,10 +245,8 @@ arma::vec grad_log_posterior_linked_shrinkage(const arma::vec &param,
        double tk = tau_vec[k];
        double b_jk = beta_int[idx];
        
-       // ✅ Gradient from likelihood: ∂ log p(y|β_{jk}) / ∂ β_{jk}
        double grad_beta_int = arma::dot(resid, X.col(j) % X.col(k)) / sigma2;
        
-       // ✅ Gradient from prior: ∂ log p(β_{jk}) / ∂ β_{jk}
        double denom = sigma2 * tj * tk * tau_int;
        grad_beta_int -= b_jk / denom;
        
@@ -280,7 +275,6 @@ arma::vec grad_log_posterior_linked_shrinkage(const arma::vec &param,
      
    }
    
-   // ✅ Gradient from inverse gamma prior on σ²
    d_log_sigma += -2.0 + 0.001 / sigma2;
    
    grad[end_tau + 2] = d_log_sigma;
@@ -357,7 +351,6 @@ Rcpp::List leapfrogCpp(
   for (int i = 0; i < num_steps; i++) {
     // Full position step
     param = param + step_size * momentum;
-    
     // Full momentum step (except for last)
     if (i != num_steps - 1) {
       momentum = momentum + step_size * grad_log_posterior_linked_shrinkage(param, X, y);

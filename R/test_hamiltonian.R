@@ -6,8 +6,8 @@ sourceCpp("src/linked_shrinkage_ll_lg.cpp")
 set.seed(42)
 
 # Number of samples and predictors
-n <- 500  # Sample size
-p <- 3    # Number of main effects
+n <- 1000  # Sample size
+p <- 3   # Number of main effects
 
 # Generate design matrix X (without intercept)
 X <- matrix(rnorm(n * p), nrow = n, ncol = p)
@@ -100,7 +100,7 @@ init_param <- c(
 )
 
 # Run HMC
-out <- hmc_sampler(init_param, n_samples = 5000, step_size = 0.015, num_steps = 30, X = X, y = y)
+out <- hmc_sampler(init_param, n_samples = 5000, step_size = 0.005, num_steps = 10, X = X, y = y)
 samples <- out$samples
 print(out$accept_rate)
 # Posterior mean estimates

@@ -43,7 +43,7 @@ generate_data <- function(n = 250,
   } else {
     # heterogeneous: tau(x) = 1 + 2*x2*x5
     # x5 is numeric here, but recall it's actually categorical
-    tau_vec <- 1 + 2*x2*(x1)
+    tau_vec <- 1 + 5*x2 + 4*x1 + 1*x2*(x1)
   }
   
   # -- 4. Compute standard deviation 's' of mu over the sample
