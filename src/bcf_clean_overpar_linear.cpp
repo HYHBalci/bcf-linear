@@ -680,7 +680,6 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
               allfit[i]   += z_[i] * beta_int[k] * x_ij;
             }
           }
-          // Example: Metropolis step for tau_int
           double currentTauInt = tau_int;
           double proposedTauInt = R::runif(0.01, 1.0); // sample from Uniform(0.01,1)
           
@@ -694,10 +693,10 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
             int_pairs,
             tau,
             sigma,
-            false,  // include_treatment_int
-            std::vector<double>(),   // empty beta_int_trt
-            std::vector<double>(),   // empty tau_trt
-            std::vector<std::pair<int,int>>()  // empty int_pairs_trt
+            false,  
+            std::vector<double>(),   
+            std::vector<double>(),   
+            std::vector<std::pair<int,int>>() 
           );
           
           double logPosteriorProposed = loglikeTauInt(
