@@ -643,7 +643,11 @@ List bcfoverparRcppCleanLinear(NumericVector y_, NumericVector z_, NumericVector
             w_j[i] = di_mod.x[i*di_mod.p + j];
           }
           beta[j] = sample_beta_j(n, r_beta, z_, w_j, tau[j], sigma);
-          tau[j] = sample_tau_j_slice(tau[j], beta[j], sigma);
+          if(intTreat){
+            tau[j] = sample_tau_j_slice(tau[j], beta[j], j, beta_int, tau, tau_int, sigma, intTreat = true);
+          } else {
+            tau[j] = sample_tau_j_slice(tau[j], beta[j], j, beta_int, tau, tau_int, sigma, intTreat = true);
+          }
           for(int i=0; i<n; i++){
             double bscale = (i < ntrt) ? bscale1 : bscale0;
             allfit[i]     = allfit[i]     +z_[i]*beta[j]*di_mod.x[i*di_mod.p + j]; //re-add the contributions. 

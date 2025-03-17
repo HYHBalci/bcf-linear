@@ -40,17 +40,17 @@ bcf_out <- bcf_linear(y                = data$y,
                       ntree_control = 400,
                       w                = weights,
                       n_chains         = 2,
-                      random_seed      = i,
+                      random_seed      = 1848,
                       update_interval  = 2000, 
                       no_output        = TRUE,
                       use_bscale = FALSE,
                       use_muscale = FALSE,
                       do_parallel = TRUE,
-                      intTreat = TRUE, hamiltonian = F, sparse = T)
+                      intTreat = TRUE, hamiltonian = F, sparse = F)
 
 load('2x10000-sparse.RData')
-chain_1 <- as.mcmc(bcf_out$raw_chains[[1]]$beta_int)
-chain_2 <- as.mcmc(bcf_out$raw_chains[[2]]$Beta)
+chain_1 <- as.mcmc(bcf_out$beta_int)
+chain_2 <- as.mcmc(bcf_out$beta)
 mcmc_list <- mcmc.list(chain_1, chain_2)
 gelman.diag(mcmc_list)
 chain_sigma <- as.mcmc(bcf_out$raw_chains[[1]]$sigma)
@@ -64,4 +64,4 @@ bcf_out$muy
 bcf_out$sdy
 
 
-hist(bcf_out$beta_int[,2], breaks = 200)
+hist(bcf_out$beta_int[,3], breaks = 20)

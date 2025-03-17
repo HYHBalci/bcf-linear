@@ -21,8 +21,8 @@ sample_beta_j <- function(N, r_beta, z, w_j, tau_j, sigma) {
     .Call('_bcf_sample_beta_j', PACKAGE = 'bcf', N, r_beta, z, w_j, tau_j, sigma)
 }
 
-sample_tau_j_slice <- function(tau_old, beta_j, sigma, step_out = 0.5, max_steps = 50L) {
-    .Call('_bcf_sample_tau_j_slice', PACKAGE = 'bcf', tau_old, beta_j, sigma, step_out, max_steps)
+sample_tau_j_slice <- function(tau_old, beta_j, index, beta_int, tau, tau_int, sigma, interaction = TRUE, step_out = 0.5, max_steps = 50L) {
+    .Call('_bcf_sample_tau_j_slice', PACKAGE = 'bcf', tau_old, beta_j, index, beta_int, tau, tau_int, sigma, interaction, step_out, max_steps)
 }
 
 sample_alpha <- function(N, r_alpha, z_, sigma, alpha_prior_sd = 10.0) {

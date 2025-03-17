@@ -70,87 +70,156 @@ double sample_beta_j(
  We define an internal function log_p_tau(...) to compute log posterior.
  */
 
-
-static double log_p_tau(double tau, double beta_j, double sigma)
-{ 
-  // Half-Cauchy(0,1): p(tau) = 2/pi * 1/(1 + tau^2), tau>0
-  // => log p(tau) = log(2/pi) - log(1 + tau^2)
-  // Normal(0, sigma^2 * tau^2): p(beta_j|tau)
-  // => log p(beta_j|tau) = -0.5 * [ log(2π) + log(sigma^2 τ^2) + (beta_j^2 / (sigma^2 τ^2)) ]
-   
-  if(tau <= 0.0) {
+double logPosteriorTauJ(
+    double tau_j,                // Proposed tau_j > 0
+    double beta_j, //proposal for beta_{j}
+    int index,  // index of {j}
+    const std::vector<double> & beta_int, // Interaction terms: beta_{j,k} for all k in 'otherIdx'
+    const std::vector<double> & tau, // The vector of all tau
+    double tau_int,   
+    double sigma,
+    const std::vector<std::pair<int,int>> &int_pairs_trt = std::vector<std::pair<int,int>>(), //vector initializing the pairs made {j,k}
+    bool interaction = false
+) {
+  // 1) check positivity
+  if (tau_j <= 0.0) {
     return -std::numeric_limits<double>::infinity();
   } 
   
-  double log_prior = std::log(2.0 / M_PI) - std::log(1.0 + tau * tau);
-   
-  // log-likelihood of beta_j
-  double log_lik = -0.5 * (
-    std::log(2.0 * M_PI)
-    + 2.0 * std::log(sigma)
-    + 2.0 * std::log(tau)
-    + (beta_j * beta_j) / ( (sigma * sigma) * (tau * tau) )
-  ); 
-  log_lik = -0.5 * (
-    std::log(2.0 * M_PI)
-    + 2.0 * std::log(sigma)
-    + 2.0 * std::log(tau)
-    + ( (beta_j * beta_j) / ( (sigma * sigma) * (tau * tau) ) )
-  );
-   
-  return log_prior + log_lik;
-} 
+  // 2) half-Cauchy(0,1) log prior: log(2/pi) - log(1 + tau_j^2)
+  double logPrior = std::log(2.0 / M_PI) - std::log(1.0 + tau_j * tau_j);
+  
+  // 3) main effect log-likelihood: Normal(0, sigma^2 * tau_j^2)
+  double log2pi  = std::log(2.0 * M_PI);
+  double var_main= (sigma * sigma) * (tau_j * tau_j);
+  double logLikMain = -0.5 * ( log2pi + std::log(var_main) ) 
+    - 0.5 * ( (beta_j * beta_j) / var_main ); 
+  
+  // 4) interaction log-likelihood
+  //    For each k in otherIdx, beta_{j,k} ~ Normal(0, sigma^2 * tau_j * tau_k * tau_int)
+  double logLikInter = 0.0;
+  if(interaction){
+    for (size_t m=0; m < int_pairs_trt.size(); m++) {
+      int iVar = int_pairs_trt[m].first;
+      int jVar = int_pairs_trt[m].second;
+      int target_idx = -1848; // index to fetch the other tau[]
+      bool sample_flag = false;
+      if (iVar == index){
+        target_idx = jVar;
+        sample_flag = true;
+      } else if (jVar == index){ 
+        target_idx =iVar;
+        sample_flag = true;
+      }
+      if(sample_flag){
+      double beta_jk = beta_int[m];
+      double var_jk;
+      if(target_idx == index){
+        var_jk  = (sigma * sigma) * tau_j * tau_j * tau_int;
+      } else {
+        var_jk  = (sigma * sigma) * tau_j * tau[target_idx] * tau_int;
+      }
+      double b2      = beta_jk * beta_jk;
+      
+      double ll = -0.5 * (log2pi + std::log(var_jk)) 
+        -0.5 * (b2 / var_jk); 
+      logLikInter += ll;
+      }}}  
+  
+  return logPrior + logLikMain + logLikInter;
+}  
 
 // [[Rcpp::export]]
 double sample_tau_j_slice(
     double tau_old,
-    double beta_j,
+    double beta_j,            // main effect beta_j
+    int index,                // index of {j}!
+    const std::vector<double> & beta_int,  // all interaction betas
+    const std::vector<double> & tau,       // all tau
+    double tau_int,
     double sigma,
+    bool interaction = true,  // or default false
     double step_out = 0.5,
-    int max_steps   = 50
-) {
+    int max_steps = 50
+)
+{ 
+  int p_int = beta_int.size();
+  int p_mod = tau.size();
+  std::vector<std::pair<int,int>> int_pairs_trt;
+  int_pairs_trt.reserve(p_int);
+  for(int ii = 0; ii < p_mod; ii++){
+    for(int jj = ii; jj < p_mod; jj++){
+      int_pairs_trt.push_back(std::make_pair(ii, jj));
+    }
+  }
   // 1) Evaluate log posterior at old tau
-  double logP_old = log_p_tau(tau_old, beta_j, sigma);
+  double logP_old = logPosteriorTauJ(
+    tau_old,
+    beta_j,
+    index,
+    beta_int,
+    tau,
+    tau_int,
+    sigma,
+    int_pairs_trt,
+    interaction
+  ); 
+  
   // 2) Draw a vertical level
   double u = R::runif(0.0, 1.0);
   double y_slice = logP_old + std::log(u);
-  
+   
   // 3) Create an interval [L, R] containing tau_old
   double L = std::max(1e-12, tau_old - step_out);
   double R = tau_old + step_out;
    
-  // Step out to the left (Prevent Infinite Loop)
+  // Step out left
   int step_count = 0;
-  while( (L > 1e-12) && (log_p_tau(L, beta_j, sigma) > y_slice) && step_count < max_steps) {
+  while ( (L > 1e-12)
+            && (logPosteriorTauJ(L, beta_j, index, beta_int, tau, tau_int, sigma, int_pairs_trt, interaction) > y_slice)
+            && (step_count < max_steps) )
+  { 
     L = std::max(1e-12, L - step_out);
     step_count++;
   }
-  
-  // Step out to the right (Prevent Infinite Loop)
+   
+  // Step out right
   step_count = 0;
-  while( log_p_tau(R, beta_j, sigma) > y_slice && step_count < max_steps) {
+  while ( (logPosteriorTauJ(R, beta_j, index, beta_int, tau, tau_int, sigma, int_pairs_trt, interaction) > y_slice)
+            && (step_count < max_steps) )
+  { 
     R += step_out;
     step_count++;
   }
    
-  // 4) Shrink the bracket until we find a sample
-  for(int rep = 0; rep < max_steps; rep++) {
-    double prop = std::max(1e-8, R::runif(L, R)); // Prevent log underflow
-    double lp   = log_p_tau(prop, beta_j, sigma);
-     
-    if(lp > y_slice) {
+  // 4) Shrink bracket until we find a valid sample
+  for (int rep = 0; rep < max_steps; rep++) {
+    double prop = std::max(1e-8, R::runif(L, R)); // propose in [L,R]
+    double lp   = logPosteriorTauJ(
+      prop,
+      beta_j,
+      index,
+      beta_int,
+      tau,
+      tau_int,
+      sigma,
+      int_pairs_trt,
+      interaction
+    ); 
+    
+    if (lp > y_slice) {
       // Accept
       return prop;
-    } else {  
+    } else { 
       // Shrink bracket
-      if(prop < tau_old) {
-        L = prop;
-      } else { 
+      if (prop < tau_old) {
+        L = prop; 
+      } else {
         R = prop;
       }
-    }
-  } 
-
+    } 
+  }
+  
   // If we never find a point in 'max_steps' tries, return a slightly perturbed tau_old
   return tau_old * (1.0 + 0.01 * R::runif(-1.0, 1.0));
 } 

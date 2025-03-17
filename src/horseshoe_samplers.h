@@ -24,8 +24,13 @@ double sample_beta_j(
 
 double sample_tau_j_slice(
     double tau_old,
-    double beta_j,
+    double beta_j,            
+    int index,                
+    const std::vector<double> & beta_int,  
+    const std::vector<double> & tau,       
+    double tau_int,
     double sigma,
+    bool interaction = true,  
     double step_out = 0.5,
     int max_steps = 50
 );
@@ -57,5 +62,17 @@ double loglikeTauInt(
     const std::vector<double> &tau_trt = std::vector<double>(),
     const std::vector<std::pair<int,int>> &int_pairs_trt = std::vector<std::pair<int,int>>()
 );  
+
+double logPosteriorTauJ(
+    double tau_j,                // Proposed tau_j > 0
+    double beta_j, //proposal for beta_{j}
+    int index,  // index of {j}
+    const std::vector<double> & beta_int, // Interaction terms: beta_{j,k} for all k in 'otherIdx'
+    const std::vector<double> & tau, // The vector of all tau
+    double tau_int,   
+    double sigma,
+    const std::vector<std::pair<int,int>> &int_pairs_trt = std::vector<std::pair<int,int>>(), //vector initializing the pairs made {j,k}
+    bool interaction = false
+);
 
 #endif 
