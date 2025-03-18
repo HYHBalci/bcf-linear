@@ -1,46 +1,49 @@
 source('R/simul_1.R')
-source('R/bcf_linear.R')
-
-library(Rcpp)
-sourceCpp("src/bcf_clean_overpar_linear.cpp")
-
-library(ggplot2)
-library(latex2exp)
-library(rpart)
-library(rpart.plot)
-library(partykit)
+library(stochtree)
 
 n_simul <- 50
 heter <- c(TRUE, FALSE)
 linear <-c(TRUE, FALSE)
 n  <- c(250, 500)
-n_burn <- 200
-n_sim <- 1000
-counter = 1
+
 for(het in heter){
   for(lin in linear){
     for(n_obser in n){
       for(i in 1:n_simul){
-        data <- generate_data(n_obser, is_te_hetero = het, is_mu_nonlinear = lin, seed = i)
+        set.seed(i)
+        
+        general_params_default <- list(
+          cutpoint_grid_size = 100, standardize = TRUE, 
+          sample_sigma2_global = TRUE, sigma2_global_init = 1, 
+          sigma2_global_shape = 1, sigma2_global_scale = 0.001,
+          variable_weights = NULL, propensity_covariate = "mu", 
+          adaptive_coding = TRUE, control_coding_init = -0.5, 
+          treated_coding_init = 0.5, rfx_prior_var = NULL, 
+          random_seed = i, keep_burnin = FALSE, keep_gfr = FALSE, 
+          keep_every = 1, num_chains = 2, verbose = F
+        )
+        data <- generate_data_2(n_obser, is_te_hetero = het, is_mu_nonlinear = lin, seed = i, RCT = T)
         weights <- rep(1,n_obser)
-        bcf_out <- bcf_linear(y                = data$y,
-                              z                = data$z,
-                              x_control        = as.matrix(data[, c(1:7)]),
-                              x_moderate       = as.matrix(data[, c(1:7)]),
-                              pihat            = data$pi_x,
-                              nburn            = n_burn,
-                              nsim             = n_sim,
-                              w                = weights,
-                              n_chains         = 2,
-                              random_seed      = i,
-                              update_interval  = 2000, 
-                              no_output        = TRUE,
-                              use_bscale = FALSE,
-                              use_muscale = FALSE,
-                              do_parallel = TRUE,
-                              intTreat = TRUE)
-        # Save the bcf object
-        save(bcf_out, file = "Singular.Rdata")
+        
+        nbcf_fit <- bcf_linear(
+          X_train = as.matrix(sapply(data[, c(1:6)], as.numeric)),
+          y_train = as.numeric(data$y),
+          Z_train = as.numeric(data$z), 
+          num_gfr = 25, 
+          num_burnin = 1000, 
+          num_mcmc = 7500, 
+          general_params = general_params_default
+        )
+        
+        # Generate a dynamic filename based on model settings
+        filename <- sprintf("BCF_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata", 
+                            ifelse(het, "T", "F"), 
+                            ifelse(lin, "T", "F"), 
+                            n_obser, 
+                            i)
+        print(filename)
+        # Save the model with dynamic naming
+        save(nbcf_fit, file = filename)
         flush.console()
       }
     }
