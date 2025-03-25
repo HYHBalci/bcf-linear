@@ -1,7 +1,11 @@
-# Load required libraries
+library(doParallel)   # For parallel backend
+library(foreach)      # For parallel foreach loops
 library(dplyr)
 library(tidyr)
-source('R/simul_1.R')  # Load `generate_data` function
+library(MASS)
+
+source('R/simul_1.R')  # Load `generate_data_2`
+
 
 # Define model specifications
 n_simul <- 50  # Number of simulations
@@ -14,10 +18,10 @@ results <- expand.grid(n = n_values, heterogeneity = heterogeneity, linearity = 
   mutate(rmse_ate = NA, cover_ate = NA, len_ate = NA,
          rmse_cate = NA, cover_cate = NA, len_cate = NA)
 
-# Function to compute mode
+# Function to compute mode from posterior samples
 compute_mode <- function(x) {
-  uniq_x <- unique(na.omit(x))
-  uniq_x[which.max(tabulate(match(x, uniq_x)))]
+  d <- density(x)  # Kernel density estimation
+  d$x[which.max(d$y)]
 }
 
 # Function to compute RMSE, Coverage, and Interval Length
@@ -26,6 +30,11 @@ compute_metrics <- function(true_values, estimates, ci_lower, ci_upper) {
   coverage <- mean(true_values >= ci_lower & true_values <= ci_upper)
   interval_length <- mean(ci_upper - ci_lower)
   return(c(rmse, coverage, interval_length))
+}
+
+# Precompute interaction pairs (no squared terms)
+interaction_pairs <- function(num_covariates) {
+  combn(1:num_covariates, 2)  # Generates all (j,k) pairs
 }
 
 # Loop through each model specification
@@ -38,75 +47,75 @@ for (n_obser in n_values) {
       cate_results <- matrix(NA, n_simul, 3)
       
       for (i in 1:n_simul) {
-        file_name <- paste0("simulations output/bcf_out_het_", het, "_lin_", lin, "_n_", n_obser, "_sim_", i, ".RData")
+        file_name <- sprintf("D:/simulations 2/BCF_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata", 
+                             ifelse(het, "T", "F"), 
+                             ifelse(lin, "T", "F"), 
+                             n_obser, i)
+        print(file_name)
         
-        # Check if file exists
         if (file.exists(file_name)) {
-          load(file_name)  # Load the saved BCF output
+          load(file_name)  # Load saved BCF fit
           
           set.seed(i)  # Ensure consistency across simulations
-          data <- generate_data(n_obser, is_te_hetero = het, is_mu_nonlinear = lin, seed = i)
+          data <- generate_data_2(n_obser, is_te_hetero = het, is_mu_nonlinear = lin, seed = i, RCT = TRUE)
           
-          X <- as.matrix(data[, c(1:7)])
+          X <- as.matrix(data[, c(1:6)])
           z <- data$z
-          true_cate <- data$tau  # Use true CATE from generate_data function
+          true_cate <- data$tau  # True CATE from data generation
           
           X_treated <- X[z == 1, , drop = FALSE]  
           true_cate_treated <- true_cate[z == 1]
           true_ate <- mean(true_cate_treated)
           
-          # ---- 2️⃣ Extract Posterior Estimates from BCF ----
-          if (!is.null(bcf_out$alpha)) {
-            muy <- bcf_out$muy
-            sdy <- bcf_out$sdy
-            bcf_out$alpha <- sdy * bcf_out$alpha + muy
-            
-            est_ate <- compute_mode(bcf_out$alpha)  # Mode estimate for ATE
-            ci_ate <- quantile(bcf_out$alpha, probs = c(0.025, 0.975))  # Bayesian Credible Interval
-            
-            # Compute ATE metrics
-            ate_results[i, ] <- compute_metrics(true_ate, est_ate, ci_ate[1], ci_ate[2])
+          # ---- Reconstruct Posterior Tau (CATE) ----
+          alpha_samples <- as.vector(t(nbcf_fit$alpha))  # Merge chains
+          beta_samples <- do.call(rbind, lapply(1:2, function(chain) nbcf_fit$Beta[chain, , ]))
+          beta_int_samples <- do.call(rbind, lapply(1:2, function(chain) nbcf_fit$Beta_int[chain, , ]))
+          
+          alpha_samples <- alpha_samples*sd(data$y)
+          beta_samples <- beta_samples*sd(data$y)
+          beta_int_samples <- beta_int_samples*sd(data$y)
+          
+          num_samples <- length(alpha_samples)
+          num_covariates <- ncol(X)
+          interaction_idx <- interaction_pairs(num_covariates)  # Precompute (j,k) pairs
+          
+          # ---- **Vectorized Matrix Computation for Tau** ----
+          tau_posterior <- matrix(NA, nrow = n_obser, ncol = num_samples)
+          
+          # Compute **all tau samples** in a single matrix operation
+          tau_posterior <- matrix(rep(alpha_samples, each = n_obser), nrow = n_obser, byrow = FALSE) +
+            X %*% t(beta_samples)  # Apply main effect contributions
+          
+          # Compute **interaction effects all at once**
+          for (idx in 1:ncol(interaction_idx)) {
+            j <- interaction_idx[1, idx]
+            k <- interaction_idx[2, idx]
+            tau_posterior <- tau_posterior + (X[, j] * X[, k]) %*% t(beta_int_samples[, idx])
           }
           
-          if (!is.null(bcf_out$beta) && !is.null(bcf_out$beta_int)) {
-            # ---- 3️⃣ Extract Coefficients Using Mode ----
-            beta_estimates <- apply(bcf_out$beta, 2, compute_mode)  # Mode of posterior estimates for main effects
-            
-            # Construct interaction matrix dynamically
-            p <- ncol(X)
-            beta_int_matrix <- matrix(0, nrow = p, ncol = p)
-            
-            interaction_pairs <- t(combn(1:p, 2))  # Get all possible interaction pairs
-            
-            # Assign interaction effects from `beta_int`
-            beta_int_values <- apply(bcf_out$beta_int, 2, compute_mode)
-            
-            # Ensure `beta_int_values` aligns correctly
-            for (idx in 1:nrow(interaction_pairs)) {
-              i <- interaction_pairs[idx, 1]
-              j <- interaction_pairs[idx, 2]
-              if (idx <= length(beta_int_values)) {  # Ensure we don't go out of bounds
-                beta_int_matrix[i, j] <- beta_int_values[idx]
-                beta_int_matrix[j, i] <- beta_int_values[idx]  # Symmetric interactions
-              }
-            }
-            
-            # Compute Estimated CATE using interaction effects properly
-            est_cate <- compute_mode(bcf_out$alpha) + X_treated %*% beta_estimates + rowSums((X_treated %*% beta_int_matrix) * X_treated)
-            
-            # Compute Bayesian Credible Intervals dynamically
-            ci_cate_lower <- quantile(bcf_out$alpha, 0.025)
-            ci_cate_upper <- quantile(bcf_out$alpha, 0.975)
-            
-            # Compute CATE metrics for treated observations
-            cate_results[i, ] <- compute_metrics(true_cate_treated, est_cate, ci_cate_lower, ci_cate_upper)
-          }
+          # ---- Compute Posterior Summary ----
+          tau_mode <- apply(tau_posterior, 1, compute_mode)
+          
+          # Compute **95% credible intervals**
+          ci_tau_lower <- apply(tau_posterior, 1, quantile, probs = 0.025)
+          ci_tau_upper <- apply(tau_posterior, 1, quantile, probs = 0.975)
+          
+          # Compute **ATE from mean of posterior tau**
+          est_ate <- mean(tau_mode)
+          ci_ate <- quantile(rowMeans(tau_posterior), probs = c(0.025, 0.975))
+          
+          # Compute **ATE metrics**
+          ate_results[i, ] <- compute_metrics(true_ate, est_ate, ci_ate[1], ci_ate[2])
+          
+          # Compute **CATE metrics**
+          cate_results[i, ] <- compute_metrics(true_cate, tau_mode, ci_tau_lower, ci_tau_upper)
         } else {
           message("File not found: ", file_name)
         }
       }
       
-      # ---- 4️⃣ Store Results ----
+      # ---- Store Results ----
       idx <- which(results$n == n_obser & results$heterogeneity == het & results$linearity == lin)
       results[idx, 4:6] <- colMeans(ate_results, na.rm = TRUE)
       results[idx, 7:9] <- colMeans(cate_results, na.rm = TRUE)
@@ -122,4 +131,3 @@ results %>%
   arrange(n, heterogeneity, linearity) %>%
   select(n, heterogeneity, linearity, everything()) %>%
   print(n = Inf)
-

@@ -96,7 +96,7 @@ generate_data <- function(n = 250,
 
 generate_data_2 <- function(n = 250,
                             is_te_hetero = FALSE,  # toggles homogeneous vs heterogeneous
-                            is_mu_nonlinear = TRUE, seed = 1848, RCT = FALSE) {
+                            is_mu_nonlinear = TRUE, seed = 1848, RCT = FALSE, test = FALSE) {
   set.seed(seed)
   
   # -- 1. Generate covariates --
@@ -126,7 +126,11 @@ generate_data_2 <- function(n = 250,
   if (!is_te_hetero) {
     tau_vec <- rep(3, n)
   } else {
-    tau_vec <- 1 + 2*x2*x4
+    if(test){
+      tau_vec <- 1 + 4*x1 + 3*x2 + 2*x2*x1
+    } else {
+      tau_vec <- 1 + 2*x2*x4
+    }
   }
   
   # -- 4. Compute standard deviation 's' of mu --
