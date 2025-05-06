@@ -20,9 +20,9 @@ progress <- function(n) setTxtProgressBar(pb, n)
 opts <- list(progress = progress)
 
 # Define model specs
-n_values <- c(250, 500)
-heterogeneity <- c(TRUE, FALSE)
-linearity <- c(TRUE, FALSE)
+n_values <- c(500)
+heterogeneity <- c(TRUE)
+linearity <- c(TRUE)
 
 results <- expand.grid(n = n_values,
                        heterogeneity = heterogeneity,
@@ -50,7 +50,6 @@ interaction_pairs <- function(num_covariates) {
 for (n_obser in n_values) {
   for (het in heterogeneity) {
     for (lin in linearity) {
-      
       # We'll store the 6 metrics per simulation in a matrix
       # [n_simul x 6] => (ate_rmse, ate_cover, ate_len, cate_rmse, cate_cover, cate_len)
       result_matrix <-
@@ -64,7 +63,7 @@ for (n_obser in n_values) {
                   #  so we don't need to call it explicitly here)
                   
                   file_name <- sprintf(
-                    "D:/simulations 3/BCF_non_RCT_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata",
+                    "test_heter_%s_linear_%s_n_%d_sim_%d.Rdata",
                     ifelse(het, "T", "F"),
                     ifelse(lin, "T", "F"),
                     n_obser, i
@@ -92,7 +91,7 @@ for (n_obser in n_values) {
                   
                   X_treated <- X[z == 1, , drop = FALSE]
                   true_cate_treated <- true_cate[z == 1]
-                  true_ate <- mean(true_cate_treated)
+                  true_ate <- mean(true_cate)
                   
                   # Compute means of x for correct alpha rescaling
                   means_x <- colMeans(X)
@@ -167,3 +166,6 @@ results %>%
   select(n, heterogeneity, linearity, everything()) %>%
   print(n = Inf)
 results
+`
+
+`

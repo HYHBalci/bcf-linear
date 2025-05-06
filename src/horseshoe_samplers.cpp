@@ -240,7 +240,7 @@ double sample_alpha(
   double sum_z = 0.0;
   double sum_rz = 0.0;
   for(int i = 0; i < N; i++){
-    sum_z  += z_[i];
+    sum_z  += z_[i] * z_[i];
     sum_rz += z_[i] * r_alpha[i];
   }
    

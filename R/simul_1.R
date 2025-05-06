@@ -70,7 +70,7 @@ generate_data <- function(n = 250,
   # -- 7. Outcome Y = mu + z*tau + eps, eps ~ N(0,1)
   eps <- rnorm(n, 0, 1)
   y <- mu + z*tau_vec + eps
-  
+  y_hat <- mu + z*tau_vec
   # Convert x5 into a factor
   x5_factor <- factor(x5_raw, levels = c(1, 2, 3))  
   
@@ -96,7 +96,7 @@ generate_data <- function(n = 250,
 
 generate_data_2 <- function(n = 250,
                             is_te_hetero = FALSE,  # toggles homogeneous vs heterogeneous
-                            is_mu_nonlinear = TRUE, seed = 1848, RCT = FALSE, test = FALSE) {
+                            is_mu_nonlinear = TRUE, seed = 1848, RCT = FALSE, test = FALSE, z_diff = F, tian = F) {
   set.seed(seed)
   
   # -- 1. Generate covariates --
@@ -147,13 +147,16 @@ generate_data_2 <- function(n = 250,
   }
   
   pi_x <- pmin(pmax(pi_x, 0), 1)
-  
-  # -- 6. Treatment assignment --
   z <- rbinom(n, size=1, prob=pi_x)
-  
+  # -- 6. Treatment assignment --
   eps <- rnorm(n, 0, 1)
-  y <- mu + z*tau_vec + eps
-  
+  if(tian){
+    y <- mu -(1-z)*tau_vec + z*tau_vec + eps
+    y_hat <- mu -(1-z)*tau_vec + z*tau_vec
+  } else {
+    y <- mu + z*tau_vec + eps
+    y_hat <- mu + z*tau_vec
+  }
   x5_factor <- factor(x5_raw, levels = c(1, 2, 3))
   contrasts(x5_factor) <- contr.sum(3)
   
@@ -161,7 +164,9 @@ generate_data_2 <- function(n = 250,
   x5_dev <- x5_dev[, -1]  # Remove intercept (which is all ones)
   
   colnames(x5_dev) <- c("x5_1", "x5_2")
-  
+  if(z_diff){
+     z <- z - 0.5 
+  }
   df <- data.frame(
     x1 = x1, 
     x2 = x2, 
@@ -173,8 +178,23 @@ generate_data_2 <- function(n = 250,
     y  = y,
     mu = mu,
     pi_x = pi_x, 
-    tau = tau_vec
+    tau = tau_vec,
+    y_hat = y_hat
   )
   
   return(df)
+}
+
+print_interaction_pairs <- function(p) {
+  print("Printing all unique (j, k) pairs where j < k")
+  interaction_pairs <- combn(1:p, 2)
+  
+  # Convert to a data frame for readability
+  pairs_df <- data.frame(
+    Index = 1:ncol(interaction_pairs),
+    Covariate_1 = interaction_pairs[1, ],
+    Covariate_2 = interaction_pairs[2, ]
+  )
+  # Return data frame for further use if needed
+  return(pairs_df)
 }
