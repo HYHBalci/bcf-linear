@@ -80,6 +80,12 @@ generate_data_2 <- function(n = 250,
 }
 
 # --- Call DGP ---
+library(Rcpp)
+library(ggplot2)
+source('R/simul_1.R')
+source('R/test_linked_shrinkage.R')
+sourceCpp("src/horseshoe_samplers.cpp")
+
 set.seed(42)
 n <- 500
 data <- generate_data_2(n = n, is_te_hetero = TRUE, is_mu_nonlinear = TRUE,
