@@ -1,7 +1,7 @@
 library(stochtree)
 
 source("C:/Users/P094412/Documents/bcf-linear/R/simul_1.R")
-data <- generate_data_2(500, is_te_hetero = TRUE, is_mu_nonlinear = TRUE, seed = 18, RCT = F, z_diff = T)
+data <- generate_data_2(500, is_te_hetero = TRUE, is_mu_nonlinear = TRUE, seed = 18, RCT = T, z_diff = F)
 general_params_default <- list(
   cutpoint_grid_size = 100, standardize = TRUE, 
   sample_sigma2_global = TRUE, sigma2_global_init = 1, 
@@ -10,7 +10,7 @@ general_params_default <- list(
   adaptive_coding = TRUE, control_coding_init = -0.5, 
   treated_coding_init = 0.5, rfx_prior_var = NULL, 
   random_seed = 1848, keep_burnin = FALSE, keep_gfr = FALSE, 
-  keep_every = 1, num_chains = 2, verbose = TRUE, global_shrinkage = F, unlink = F, propensity_seperate = F
+  keep_every = 1, num_chains = 2, verbose = TRUE, global_shrinkage = T, unlink = T, propensity_seperate = F
 )
 
 nbcf_fit <- bcf_linear( X_train = as.matrix(sapply(data[, c(1:6)], as.numeric)),
@@ -51,37 +51,33 @@ legend("topright",
        lty = c(1, 2),
        lwd = 2)
 }
+library(stochtree)
+
+source("C:/Users/P094412/Documents/bcf-linear/R/simul_1.R")
 
 general_params_default <- list(
   cutpoint_grid_size = 100, standardize = TRUE, 
   sample_sigma2_global = TRUE, sigma2_global_init = 1, 
   sigma2_global_shape = 1, sigma2_global_scale = 0.001,
   variable_weights = NULL, propensity_covariate = "mu", 
-  adaptive_coding = TRUE, control_coding_init = -0.5, 
+  adaptive_coding = FALSE, control_coding_init = -0.5, 
   treated_coding_init = 0.5, rfx_prior_var = NULL, 
-  random_seed = 1848, keep_burnin = FALSE, keep_gfr = FALSE, 
+  random_seed = 1234, keep_burnin = FALSE, keep_gfr = FALSE, 
   keep_every = 1, num_chains = 2, verbose = T, 
-  global_shrinkage = FALSE, unlink = FALSE, propensity_seperate = F, step_out = 0.5, max_steps = 50
+  global_shrinkage = T, unlink = T, propensity_seperate = F, gibbs =T, step_out = 0.5, max_steps = 50
 )
-data <- generate_data_2(500, is_te_hetero = T, is_mu_nonlinear = T, seed = 1848, RCT = FALSE, z_diff = T)
-prognostic_forest_params_default <- list(
-  num_trees = 250, alpha = 0.95, beta = 2, 
-  min_samples_leaf = 5, max_depth = 10, 
-  sample_sigma2_leaf = TRUE, sigma2_leaf_init = NULL, 
-  sigma2_leaf_shape = 10, sigma2_leaf_scale = 0.1 * var(data$y) / 250, 
-  keep_vars = NULL, drop_vars = NULL
-)
+data <- generate_data_2(500, is_te_hetero = T, is_mu_nonlinear = T, seed = 1848, RCT = FALSE, z_diff = F)
+
 nbcf_fit <- bcf_linear(
   X_train = as.matrix(sapply(data[, c(1:6)], as.numeric)),
   y_train = as.numeric(data$y),
   Z_train = as.numeric(data$z), 
   num_gfr = 25, 
   num_burnin = 1000, 
-  num_mcmc = 7000, 
-  general_params = general_params_default,
-  prognostic_forest_params = prognostic_forest_params_default
+  num_mcmc = 4000, 
+  general_params = general_params_default
 )
-
+    
 set.seed(1848)
 mu_hat_train <- nbcf_fit$mu_hat_train
 mu_hat_real <- data$y_hat
@@ -97,3 +93,22 @@ abline(v = mu_hat_real[i],          # x-position (a single number or vector)
        lwd = 2,              # line width
        lty = 2) 
 }
+
+library(stochtree)
+
+source('C:/Users/P094412/Documents/stochtree/R/predict_linear.R')
+
+alpha <- 2
+p_mod <- 6
+beta <- rep(1, p_mod)  # Main effect coefficients
+# Interaction term initialization
+p_int <- (p_mod * (p_mod - 1)) / 2  # Number of interaction terms
+beta_int <- rep(0, p_int)  # Interaction effect coefficients
+data <- generate_data_2(n = 200, is_te_hetero = TRUE, is_mu_nonlinear = TRUE,
+                        RCT = TRUE, z_diff = TRUE, tian = TRUE)
+
+X <- as.matrix(data[, c("x1", "x2", "x3", "x4", "x5_1", "x5_2")])
+
+predictions <- predict_interaction_lm(X, c(alpha, beta, beta_int))
+test <- rep(alpha, 2) + X %*% beta
+test - predictions

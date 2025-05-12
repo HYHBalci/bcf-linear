@@ -92,11 +92,11 @@ data <- generate_data_2(n = n, is_te_hetero = TRUE, is_mu_nonlinear = TRUE,
                         RCT = TRUE, z_diff = TRUE, tian = TRUE)
 
 X <- as.matrix(data[, c("x1", "x2", "x3", "x4", "x5_1", "x5_2")])
-y <- 2 * data$y * data$z 
+y <- 
 z <- data$z
 
 # --- Run Tian Model ---
-posterior <- sample_linear_part(y, rep(1,n), X, intTreat = TRUE, iter = 3000, burnin = 1000)
+posterior <- sample_linear_part(data$y, rep(1,n), X, intTreat = TRUE, iter = 3000, burnin = 1000, horseshoe =  TRUE)
 
 # --- Construct Interaction Terms ---
 p <- ncol(X)
