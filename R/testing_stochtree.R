@@ -64,7 +64,7 @@ general_params_default <- list(
   treated_coding_init = 0.5, rfx_prior_var = NULL, 
   random_seed = 1234, keep_burnin = FALSE, keep_gfr = FALSE, 
   keep_every = 1, num_chains = 2, verbose = T, 
-  global_shrinkage = T, unlink = T, propensity_seperate = F, gibbs =T, step_out = 0.5, max_steps = 50
+  global_shrinkage = T, unlink = T, propensity_seperate = F, gibbs =T, step_out = 0.5, max_steps = 50, save_output = F
 )
 data <- generate_data_2(500, is_te_hetero = T, is_mu_nonlinear = T, seed = 1848, RCT = FALSE, z_diff = F)
 

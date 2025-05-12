@@ -2,7 +2,7 @@
 library(ggplot2)
 
 # --- Data Generation Function ---
-generate_data_2 <- function(n = 250,
+generate_data_3 <- function(n = 250,
                             is_te_hetero = FALSE,
                             is_mu_nonlinear = TRUE,
                             seed = 1848,
@@ -89,10 +89,9 @@ sourceCpp("src/horseshoe_samplers.cpp")
 set.seed(42)
 n <- 500
 data <- generate_data_2(n = n, is_te_hetero = TRUE, is_mu_nonlinear = TRUE,
-                        RCT = TRUE, z_diff = TRUE, tian = TRUE)
+                        RCT = TRUE, z_diff = F, tian = F)
 
 X <- as.matrix(data[, c("x1", "x2", "x3", "x4", "x5_1", "x5_2")])
-y <- 
 z <- data$z
 
 # --- Run Tian Model ---

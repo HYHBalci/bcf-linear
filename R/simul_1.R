@@ -96,7 +96,7 @@ generate_data <- function(n = 250,
 
 generate_data_2 <- function(n = 250,
                             is_te_hetero = FALSE,  # toggles homogeneous vs heterogeneous
-                            is_mu_nonlinear = TRUE, seed = 1848, RCT = FALSE, test = FALSE, z_diff = F, tian = F) {
+                            is_mu_nonlinear = TRUE, seed = 1848, RCT = FALSE, test = FALSE, z_diff = F, tian = F, contrast_binary = T) {
   set.seed(seed)
   
   # -- 1. Generate covariates --
@@ -104,6 +104,9 @@ generate_data_2 <- function(n = 250,
   x2 <- rnorm(n, mean=0, sd=1)
   x3 <- rnorm(n, mean=0, sd=1)
   x4 <- rbinom(n, size=1, prob=0.5)
+  if(contrast_binary){
+    x4 <- 2 * x4 - 1
+  }
   x5_raw <- sample(1:3, size=n, replace=TRUE, prob=c(1/3,1/3,1/3))
   
   # Define function for categorical effect
