@@ -20,9 +20,9 @@ progress <- function(n) setTxtProgressBar(pb, n)
 opts <- list(progress = progress)
 
 # Define model specs
-n_values <- c(500)
-heterogeneity <- c(TRUE)
-linearity <- c(TRUE)
+n_values <- c(250,500)
+heterogeneity <- c(TRUE, FALSE)
+linearity <- c(TRUE, FALSE)
 
 results <- expand.grid(n = n_values,
                        heterogeneity = heterogeneity,
@@ -35,10 +35,14 @@ compute_mode <- function(x) {
   d$x[which.max(d$y)]
 }
 
-compute_metrics <- function(true_values, estimates, ci_lower, ci_upper) {
+compute_metrics <- function(true_values, estimates, ci_lower, ci_upper, file_name) {
   rmse <- sqrt(mean((true_values - estimates)^2))
   coverage <- mean(true_values >= ci_lower & true_values <= ci_upper)
   interval_length <- mean(ci_upper - ci_lower)
+  if(rmse > 10){
+    print('error occured in the following simulation:')
+    print(file_name)
+  }
   return(c(rmse, coverage, interval_length))
 }
 
@@ -63,7 +67,7 @@ for (n_obser in n_values) {
                   #  so we don't need to call it explicitly here)
                   
                   file_name <- sprintf(
-                    "test_heter_%s_linear_%s_n_%d_sim_%d.Rdata",
+                    "D:/simulhorseshoe/HORSESHOE_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata",
                     ifelse(het, "T", "F"),
                     ifelse(lin, "T", "F"),
                     n_obser, i
@@ -135,8 +139,8 @@ for (n_obser in n_values) {
                   est_ate <- mean(ate_draws)
                   ci_ate  <- quantile(ate_draws, probs = c(0.025, 0.975))
                   
-                  ate_vec <- compute_metrics(true_ate, est_ate, ci_ate[1], ci_ate[2])
-                  cate_vec <- compute_metrics(true_cate, tau_mode, ci_tau_lower, ci_tau_upper)
+                  ate_vec <- compute_metrics(true_ate, est_ate, ci_ate[1], ci_ate[2], file_name)
+                  cate_vec <- compute_metrics(true_cate, tau_mode, ci_tau_lower, ci_tau_upper, file_name)
                   
                   # Return a 6-element vector
                   c(ate_vec, cate_vec)
