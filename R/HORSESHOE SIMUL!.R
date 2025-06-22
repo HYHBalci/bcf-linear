@@ -2,15 +2,15 @@ source('R/simul_1.R')
 library(stochtree)
 
 n_simul <- 50
-heter <- c(TRUE, FALSE)
+heter <- c(TRUE,FALSE)
 linear <-c(TRUE, FALSE)
 n  <- c(250, 500)
 
 for(het in heter){
   for(lin in linear){
     for(n_obser in n){
+      if((!het & !lin) | ((!het & lin)  & (n_obser == 500))){
       for(i in 1:n_simul){
-        set.seed(i)
         general_params_default <- list(
           cutpoint_grid_size = 100, standardize = TRUE, 
           sample_sigma2_global = TRUE, sigma2_global_init = 1, 
@@ -18,11 +18,11 @@ for(het in heter){
           variable_weights = NULL, propensity_covariate = "mu", 
           adaptive_coding = FALSE, control_coding_init = -0.5, 
           treated_coding_init = 0.5, rfx_prior_var = NULL, 
-          random_seed = 1234, keep_burnin = FALSE, keep_gfr = FALSE, 
+          random_seed = i, keep_burnin = FALSE, keep_gfr = FALSE, 
           keep_every = 1, num_chains = 2, verbose = F, 
           global_shrinkage = T, unlink = T, propensity_seperate = F, gibbs =T, step_out = 0.5, max_steps = 50, save_output = F
         )
-        data <- generate_data_2(500, is_te_hetero = T, is_mu_nonlinear = T, seed = 1848, RCT = FALSE, z_diff = F)
+        data <- generate_data_2(n_obser, is_te_hetero = het, is_mu_nonlinear = lin, seed = i, RCT = FALSE, z_diff = F)
         
         nbcf_fit <- bcf_linear(
           X_train = as.matrix(sapply(data[, c(1:6)], as.numeric)),
@@ -34,17 +34,15 @@ for(het in heter){
           general_params = general_params_default
         )
         # Generate a dynamic filename based on model settings
-        filename <- sprintf("HORSESHOE_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata", 
+        filename <- sprintf("E:/simulhorseshoe/HORSESHOE_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata", 
                             ifelse(het, "T", "F"), 
                             ifelse(lin, "T", "F"), 
                             n_obser, 
                             i)
-        print('saving')
         print(filename)
         # Save the model with dynamic naming
         
-        save(nbcf_fit, file = filename)
-        print('save succesful')
+        save(nbcf_fit, file = filename)}
       }
     }
   }

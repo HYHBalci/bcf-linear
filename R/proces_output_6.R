@@ -1,7 +1,7 @@
 library(dplyr)
 library(tidyr)
 library(MASS)
-
+library(stochtree)
 # Source data generation
 source("R/simul_1.R")  # your generate_data_2 function
 
@@ -34,9 +34,22 @@ compute_metrics <- function(true_values, estimates, ci_lower, ci_upper, file_nam
   return(c(rmse, coverage, interval_length))
 }
 
-interaction_pairs <- function(num_covariates) {
-  combn(1:num_covariates, 2)
+interaction_pairs <- function(num_covariates, boolean_vector) {
+  interaction_list <- list()
+  for (j in 1:(num_covariates-1)) {
+      for (k in (j + 1):num_covariates) {
+        if(boolean_vector[j] || boolean_vector[k])
+          interaction_list[[length(interaction_list) + 1]] <- c(j, k)
+      }
+  }
+  return (do.call(cbind, interaction_list))
 }
+data <- generate_data_2(500, T, T, seed = 1848, RCT = FALSE)
+
+X <- as.matrix(data[, 1:6])
+res <- standardize_X_by_index(X_initial = X, process_data = F, interaction_rule = "continuous_or_binary", cat_coding_method = "difference")
+
+boolean <- as.logical(as.numeric(res$X_final_var_info$is_binary) + as.numeric(res$X_final_var_info$is_continuous))
 
 # Loop over model settings
 for (n_obser in n_values) {
@@ -47,7 +60,7 @@ for (n_obser in n_values) {
       
       for (i in 1:n_simul) {
         file_name <- sprintf(
-          "D:/simulhorseshoe/HORSESHOE_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata",
+          "D:/Block_linked/Block_linked_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata",
           ifelse(het, "T", "F"),
           ifelse(lin, "T", "F"),
           n_obser, i
@@ -59,9 +72,12 @@ for (n_obser in n_values) {
           load(file_name)  # loads object: nbcf_fit
           print(file_name)
           set.seed(i)
-          data <- generate_data_2(n_obser, het, lin, seed = i, RCT = FALSE)
+          data <- generate_data_2(n_obser, het, lin, seed = i, RCT = FALSE, z_diff = F)
           
           X <- as.matrix(data[, 1:6])
+          # res <- standardize_X_by_index(X_initial = X, process_data = F, interaction_rule = "continuous_or_binary", cat_coding_method = "difference")
+          # 
+          # boolean <- as.logical(as.numeric(res$X_final_var_info$is_binary) + as.numeric(res$X_final_var_info$is_continuous))
           z <- data$z
           true_cate <- data$tau
           true_ate <- mean(true_cate)
@@ -79,7 +95,7 @@ for (n_obser in n_values) {
           
           num_samples <- length(alpha_samples)
           num_covariates <- ncol(X)
-          ipairs <- interaction_pairs(num_covariates)
+          ipairs <- interaction_pairs(num_covariates, boolean)
           
           # Posterior samples of tau(x)
           tau_posterior <- matrix(rep(alpha_samples, each = n_obser),
