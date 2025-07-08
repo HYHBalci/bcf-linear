@@ -347,3 +347,67 @@ fit_grouped_horseshoes_R <- function(
   
   return(output)
 }
+
+######################## GAUSSIAN FAMILY. ########################
+
+# --- Example Usage (using the simple simulation) ---
+source('R/simul_1.R')
+
+data <- generate_data_2(500, is_te_hetero = F, is_mu_nonlinear = F, seed = 40, RCT = FALSE, z_diff = F, contrast_binary = T)
+X <- as.matrix(sapply(data[, c(1:6)], as.numeric))
+y <- as.numeric(data$y)
+z <- as.numeric(data$z)
+
+cat("\n--- Running Grouped Horseshoe Logistic Sampler ---\n")
+start.time <- Sys.time()
+fit_grouped_hs <- fit_grouped_horseshoes_R(
+  y_vec = y,
+  X_mat = X,
+  Z_vec = z,
+  family = "gaussian",
+  n_iter = 4000, # Increase for better results
+  burn_in = 1000,
+  num_chains = 3,
+  propensity_as_covariate = T,
+  method_tau_prognostic = "halfCauchy", tau_prognostic_init = 0.1,
+  method_tau_treatment = "halfCauchy", tau_treatment_init = 0.1,
+  method_tau_overall = "fixed", tau_overall_init = 1,
+  alpha_global_prior_sd = 5.0,
+  aleph_prior_sd = 5.0,
+  thin = 1,
+  seed = 103,
+  verbose = TRUE,
+  ping = 500
+)
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+time.taken
+cat("\n--- Grouped HS: Posterior Means vs True Parameters ---\n")
+cat("Alpha_global (Overall Intercept): True =", true_params_check$alpha,
+    ", Estimated =", mean(fit_grouped_hs$alpha), "\n")
+
+if(ncol(fit_grouped_hs$beta) > 0) {
+  beta_comp_ghs <- data.frame(True = true_params_check$beta, Estimated = colMeans(fit_grouped_hs$beta))
+  rownames(beta_comp_ghs) <- paste0("Beta_", colnames(X_sim))
+  print(beta_comp_ghs)
+}
+
+# For beta_interaction, true is 0 in simple DGP
+if (ncol(fit_grouped_hs$beta_interaction) > 0) {
+  cat("\nBeta_interaction (Prognostic XX - True should be ~0 for simple DGP):\n")
+  print(colMeans(fit_grouped_hs$beta_interaction))
+}
+
+cat("\nAleph (Treatment Intercept Modifier): True =", true_params_check$aleph,
+    ", Estimated =", mean(fit_grouped_hs$aleph), "\n")
+
+if(ncol(fit_grouped_hs$gamma) > 0) {
+  gamma_comp_ghs <- data.frame(True = true_params_check$gamma, Estimated = colMeans(fit_grouped_hs$gamma))
+  rownames(gamma_comp_ghs) <- paste0("Gamma_Z_", colnames(X_sim))
+  print(gamma_comp_ghs)
+}
+
+# For gamma_int, true is 0 in simple DGP
+if (ncol(fit_grouped_hs$gamma_int) > 0) {
+  cat("\nGamma_int (Z*XX - True should be ~0 for simple DGP")
+  }
