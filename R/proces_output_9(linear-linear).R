@@ -27,7 +27,7 @@ interaction_pairs <- function(num_covariates, boolean_vector) {
   if (num_covariates > 1) {
     for (j in 1:(num_covariates - 1)) {
       for (k in (j + 1):num_covariates) {
-        if (boolean_vector[j] || boolean_vector[k])
+        if (TRUE)
           interaction_list[[length(interaction_list) + 1]] <- c(j, k)
       }
     }
@@ -77,7 +77,7 @@ for (n_obser in n_values) {
       
       for (i in 1:n_simul) {
         file_name <- sprintf(
-          "D:/Block_linked/Block_linked_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata",
+          "D:/linear-linear/linear_linear_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata",
           ifelse(het, "T", "F"), ifelse(lin, "T", "F"), n_obser, i
         )
         
@@ -102,11 +102,11 @@ for (n_obser in n_values) {
           true_cate <- data$tau
           true_ate <- mean(true_cate)
           
-          alpha_samples <- as.vector(t(nbcf_fit$alpha))
-          beta_samples <- do.call(rbind, lapply(1:2, function(chain) nbcf_fit$Beta[chain, , ]))
-          beta_int_samples <- do.call(rbind, lapply(1:2, function(chain) nbcf_fit$Beta_int[chain, , ]))
+          alpha_samples <- fit_grouped_hs$aleph
+          beta_samples <- fit_grouped_hs$gamma
+          beta_int_samples <- fit_grouped_hs$gamma_int
           
-          sd_y <- sd(data$y)
+          sd_y <- 1
           alpha_samples <- alpha_samples * sd_y
           beta_samples <- beta_samples * sd_y
           beta_int_samples <- beta_int_samples * sd_y
@@ -164,7 +164,7 @@ for (n_obser in n_values) {
 
 # 3. FINAL OUTPUTS
 # --------------------------------------------------------------------------
-save(results, file = 'results_linked.RData')
+save(results, file = 'results_linear_linear.RData')
 # --- 3A. Print the original summary results table ---
 cat("\n\n--- Summary Results Table ---\n")
 # final_summary_table <- results %>%
@@ -217,13 +217,3 @@ metrics_plot <- ggplot(results_long, aes(x = heterogeneity, y = value, fill = li
 print(metrics_plot)
 
 
-
-################################################
-library(coda)
-data <- generate_data_2(n = 500, is_te_hetero = TRUE, is_mu_nonlinear = TRUE, seed = 40)
-chain_1 <- as.mcmc(nbcf_fit$Beta[1,,]*sd(data$y))
-summary(chain_1)
-chain_2 <- as.mcmc(nbcf_fit$Beta_int[1,,]*sd(data$y))
-summary(chain_2)
-chain_3 <- as.mcmc(nbcf_fit$alpha[1,]*sd(data$y))
-summary(chain_3)
