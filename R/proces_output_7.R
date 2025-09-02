@@ -40,7 +40,7 @@ interaction_pairs <- function(num_covariates, boolean_vector) {
 n_simul <- 50
 n_values <- c(250, 500)
 heterogeneity_opts <- c(TRUE, FALSE)
-linearity_opts <- c(TRUE, FALSE)
+linearity_opts <- c(TRUE,FALSE)
 
 data <- generate_data_2(500, T, T, seed = 1848, RCT = FALSE)
 
@@ -77,7 +77,7 @@ for (n_obser in n_values) {
       
       for (i in 1:n_simul) {
         file_name <- sprintf(
-          "D:/Block_linked/Block_linked_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata",
+          "D:/block_horseshoe/Block_horse_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata",
           ifelse(het, "T", "F"), ifelse(lin, "T", "F"), n_obser, i
         )
         
