@@ -1,17 +1,18 @@
-source('R/simul_1.R')
 library(stochtree)
 library(BayesLogit)
 library(MASS)
 library(stochtree)
 
-create_interaction_pairs_R <- function(p_main_local) {
+create_interaction_pairs_R <- function(p_main_local, boolean_continous) {
   pairs_local <- list()
   if (p_main_local < 2) return(list())
   idx <- 1
   for (j_idx in 1:(p_main_local - 1)) {
     for (k_idx in (j_idx + 1):p_main_local) {
-      pairs_local[[idx]] <- c(j_idx, k_idx)
-      idx <- idx + 1
+      if(boolean_continous[j_idx] || boolean_continous[k_idx]){
+        pairs_local[[idx]] <- c(j_idx, k_idx)
+        idx <- idx + 1
+      }
     }
   }
   return(pairs_local)
@@ -67,6 +68,7 @@ safe_var_R <- function(x) {
 #' @export
 #' @importFrom MASS mvrnorm
 #' @importFrom stats rgamma rexp runif pgamma qgamma rnorm var
+
 fit_grouped_horseshoes_R <- function(
     y_vec, X_mat, Z_vec,
     family = c("binomial", "gaussian"),
@@ -79,7 +81,12 @@ fit_grouped_horseshoes_R <- function(
     thin = 1,
     seed = 123,
     verbose = FALSE,
-    ping = 1000
+    ping = 1000,
+    standardize_cov = F,
+    interaction_rule = 'continuous_or_binary',
+    cat_coding_method = "difference",
+    sample_sigma = T,
+    sigma_init =1 
 ) {
   if (!is.null(seed)) {
     set.seed(seed)
@@ -87,16 +94,34 @@ fit_grouped_horseshoes_R <- function(
   } else {
     chain_seeds <- rep(NA, num_chains)
   }
-  
+  print(length(Z_vec))
   family <- match.arg(family)
   method_tau_prognostic <- match.arg(method_tau_prognostic)
   method_tau_treatment <- match.arg(method_tau_treatment)
   method_tau_overall <- match.arg(method_tau_overall)
   
-  # --- Input Validation ---
+  # --- Input Coercion and Validation ---
+  X_mat <- as.matrix(X_mat) # Ensure input is a matrix from the start
   if (length(unique(na.omit(y_vec))) <= 1) {
     stop("Outcome variable `y_vec` is constant or has no variation. Model cannot be fit.")
   }
+  
+  # NOTE: Assuming 'standardize_X_by_index' is a valid, existing helper function.
+  handled_data_list <- standardize_X_by_index(X_mat, process_data = standardize_cov, interaction_rule = interaction_rule, cat_coding_method = "difference")
+  X_train <- handled_data_list$X_final
+  X_final_var_info <- handled_data_list$X_final_var_info
+  X_mat <- as.matrix(X_train) # Ensure X_mat is a matrix after processing
+  p_int <- handled_data_list$p_int
+  non_continous_idx_cpp <- handled_data_list$non_continous_idx_cpp
+  boolean_continuous <- as.vector(X_final_var_info$is_continuous)
+  if(interaction_rule == 'continuous'){
+    boolean_continuous <- as.vector(X_final_var_info$is_continuous)
+  } else if(interaction_rule == 'continuous_or_binary'){
+    boolean_continuous <- as.vector(X_final_var_info$is_continuous) + as.vector(X_final_var_info$is_binary)
+  } else { #This means we allow all interactions. 
+    boolean_continuous <- as.vector(X_final_var_info$is_continuous) + as.vector(X_final_var_info$is_binary) + as.vector(X_final_var_info$is_categorical)
+  }
+  boolean_continuous <- as.logical(boolean_continuous)
   
   N <- nrow(X_mat)
   p_main_X_orig <- ncol(X_mat)
@@ -105,56 +130,79 @@ fit_grouped_horseshoes_R <- function(
   # --- Propensity Score Estimation (if requested) ---
   propensity_scores <- NULL
   if (propensity_as_covariate) {
-    if (verbose) message("Estimating propensity scores to use as a covariate...")
-    ps_num_burnin <- 10
-    ps_num_total <- 50
-    bart_model_propensity <- bart(X_train = X_mat_orig, y_train = as.numeric(Z_vec), X_test = NULL, 
-                                  num_gfr = ps_num_total, num_burnin = 0, num_mcmc = 0)
-    propensity_scores <- rowMeans(bart_model_propensity$y_hat_train[,(ps_num_burnin+1):ps_num_total])
+    if (verbose){
+      message("Estimating propensity scores to use as a covariate...")
+      print(dim(X_mat))
+      print(dim(Z_vec))
+    }
+    if (!requireNamespace("stochtree", quietly = TRUE)) {
+      stop("Package 'stochtree' needed for propensity score estimation. Please install it.")
+    }
+    # A simple BART model for propensity scores
+    
+    bart_model_propensity <- stochtree::bart(X_train = X_mat_orig, y_train = as.numeric(Z_vec), num_gfr = 50, num_mcmc = 0)
+    propensity_scores <- rowMeans(bart_model_propensity$y_hat_train)
     if (verbose) message("Propensity scores calculated.")
   }
   
-  # --- 1. Construct Design Matrices (once, outside the chain loop) ---
-  # Prognostic Part (beta, beta_int, and potentially propensity score)
-  X_prog_list <- list()
-  if(is.null(colnames(X_mat_orig))) colnames(X_mat_orig) <- paste0("X", 1:p_main_X_orig)
-  X_prog_list$beta <- X_mat_orig
-  if (!is.null(propensity_scores)) {
-    X_prog_list$beta_propensity <- propensity_scores
-  }
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # --- 1. Construct Design Matrices (REWRITTEN FOR ROBUSTNESS) ---
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   
-  main_interaction_indices_X <- create_interaction_pairs_R(p_main_X_orig)
+  # --- Create individual matrix components first ---
+  
+  # Component: Main effects for prognostic model (always exists)
+  X_beta_main_mat <- X_mat_orig
+  colnames(X_beta_main_mat) <- paste0("X", 1:p_main_X_orig)
+  
+  # Component: Interaction effects for prognostic model (might not exist)
+  main_interaction_indices_X <- create_interaction_pairs_R(p_main_X_orig, boolean_continuous)
   p_interaction_X <- length(main_interaction_indices_X)
-  X_beta_int_mat <- matrix(0, nrow = N, ncol = p_interaction_X)
-  colnames_beta_int <- character(p_interaction_X)
-  for (k in 1:p_interaction_X) {
+  X_beta_int_mat <- NULL # Initialize as NULL
+  if (p_interaction_X > 0) {
+    X_beta_int_mat <- matrix(0, nrow = N, ncol = p_interaction_X)
+    colnames_beta_int <- character(p_interaction_X)
+    for (k in 1:p_interaction_X) {
       idx_pair <- main_interaction_indices_X[[k]]
       X_beta_int_mat[, k] <- X_mat_orig[, idx_pair[1]] * X_mat_orig[, idx_pair[2]]
       colnames_beta_int[k] <- paste0("beta_int_", paste(colnames(X_mat_orig)[idx_pair], collapse="_"))
+    }
+    colnames(X_beta_int_mat) <- colnames_beta_int
   }
-  colnames(X_beta_int_mat) <- colnames_beta_int
-  X_prog_list$beta_int <- X_beta_int_mat
   
-  X_prognostic <- if(length(X_prog_list) > 0) do.call(cbind, X_prog_list) else matrix(0, nrow=N, ncol=0)
+  # --- Assemble the full PROGNOSTIC matrix sequentially ---
+  X_prognostic <- X_beta_main_mat
+  if (!is.null(propensity_scores)) {
+    X_prognostic <- cbind(X_prognostic, propensity_score = propensity_scores)
+  }
+  if (!is.null(X_beta_int_mat)) {
+    X_prognostic <- cbind(X_prognostic, X_beta_int_mat)
+  }
   p_prognostic <- ncol(X_prognostic)
   
-  # Treatment-related Part (gamma, gamma_int) - uses ORIGINAL X_mat only
-  X_treat_list <- list()
-  if (p_main_X_orig > 0) {
-    X_gamma_mat <- X_mat_orig * Z_vec 
-    colnames(X_gamma_mat) <- paste0("Z_", colnames(X_mat_orig))
-    X_treat_list$gamma <- X_gamma_mat
-  }
-  if (p_interaction_X > 0) {
-    # Re-use the prognostic interaction matrix base for consistency
-    X_gamma_int_mat <- X_prog_list$beta_int * Z_vec 
-    colnames(X_gamma_int_mat) <- paste0("Z_", colnames(X_prog_list$beta_int))
-    X_treat_list$gamma_int <- X_gamma_int_mat
-  }
-  X_treatment_related <- if(length(X_treat_list) > 0) do.call(cbind, X_treat_list) else matrix(0, nrow=N, ncol=0)
-  p_treatment_related <- ncol(X_treatment_related)
+  # --- Assemble the full TREATMENT matrix sequentially ---
   
-  X_hs <- cbind(X_prognostic, X_treatment_related)
+  # Component: Main effects for treatment model (might not exist)
+  X_gamma_main_mat <- NULL
+  if (p_main_X_orig > 0) {
+    X_gamma_main_mat <- X_mat_orig * Z_vec
+    colnames(X_gamma_main_mat) <- paste0("Z_", colnames(X_mat_orig))
+  }
+  
+  # Component: Interaction effects for treatment model (might not exist)
+  X_gamma_int_mat <- NULL
+  if (!is.null(X_beta_int_mat)) { # Re-use the prognostic interaction base
+    X_gamma_int_mat <- X_beta_int_mat * Z_vec
+    colnames(X_gamma_int_mat) <- paste0("Z_", colnames(X_beta_int_mat))
+  }
+  
+  # Combine treatment components (cbind handles NULL correctly)
+  X_treatment_related <- cbind(X_gamma_main_mat, X_gamma_int_mat) 
+  p_treatment_related <- if(!is.null(X_treatment_related)) ncol(X_treatment_related) else 0
+  
+  # --- Final combined matrix for the sampler ---
+  # EXPLICITLY COERCE TO MATRIX to avoid any data.frame methods being called
+  X_hs <- as.matrix(cbind(X_prognostic, X_treatment_related))
   p_hs_total <- ncol(X_hs)
   
   # --- List to store results from all chains ---
@@ -169,15 +217,14 @@ fit_grouped_horseshoes_R <- function(
     # --- Initialize Parameters (inside chain loop for independence) ---
     alpha_global <- 0.0
     aleph <- 0.0
-    Beta_hs <- rep(0, p_hs_total)    
-    lambda_hs <- rep(1, p_hs_total)  
+    Beta_hs <- rep(0, p_hs_total)  
+    lambda_hs <- rep(1, p_hs_total) 
     current_tau_prognostic <- tau_prognostic_init
     current_tau_treatment <- tau_treatment_init
     current_tau_overall <- tau_overall_init
     
     if (family == "gaussian") {
-      sigma_sq <- var(y_vec, na.rm = TRUE)
-      if (is.na(sigma_sq) || sigma_sq == 0) sigma_sq <- 1.0 # Fallback
+      sigma_sq <- sigma_init
     } else { 
       y_adj <- y_vec - 0.5
     }
@@ -199,19 +246,20 @@ fit_grouped_horseshoes_R <- function(
     for (iter_idx in 1:n_iter) {
       if (verbose && iter_idx %% ping == 0) message("Chain ", chain_num, " - Iteration: ", iter_idx, "/", n_iter)
       
-      # (The entire MCMC loop logic from the previous version goes here)
-      # This logic remains correct after augmenting X_mat
       # Start of inner MCMC logic
       eta_hs_part <- if(p_hs_total > 0) as.vector(X_hs %*% Beta_hs) else rep(0, N)
       eta <- alpha_global + Z_vec * aleph + eta_hs_part
       if (family == "binomial") {
+        # Assuming BayesLogit is loaded
         omega <- BayesLogit::rpg(num = N, h = 1, z = eta)
         omega[omega < 1e-9] <- 1e-9
         z_aug <- y_adj / omega; w_vec <- omega
         scale_factor <- 1.0
       } else {
-        z_aug <- y_vec; w_vec <- rep(1, N); scale_factor <- sigma_sq
-        }
+        z_aug <- y_vec
+        w_vec <- rep(1, N)
+        scale_factor <- sigma_sq
+      }
       resid_for_alpha <- z_aug - (Z_vec * aleph + eta_hs_part)
       prior_prec_alpha <- 1 / safe_var_R(alpha_global_prior_sd^2)
       post_prec_alpha <- sum(w_vec) / scale_factor + prior_prec_alpha; post_mean_alpha <- (sum(w_vec * resid_for_alpha) / scale_factor + alpha_global_prior_mean * prior_prec_alpha) / post_prec_alpha; alpha_global <- rnorm(1, mean = post_mean_alpha, sd = sqrt(1 / post_prec_alpha))
@@ -245,7 +293,7 @@ fit_grouped_horseshoes_R <- function(
           xi_inv_overall <- stats::rexp(1, rate = 1 + 1/safe_var_R(current_tau_overall^2))
           rate_overall <- xi_inv_overall + sum(Beta_hs^2 / (2 * scale_factor * safe_var_R(lambda_hs^2 * tau_vector_components^2)))
           current_tau_overall <- sqrt(rinvgamma_R(1, shape = (p_hs_total + 1)/2, scale = rate_overall))
-          }
+        }
         current_tau_prognostic <- max(current_tau_prognostic, 1e-6)
         current_tau_treatment <- max(current_tau_treatment, 1e-6)
         current_tau_overall <- max(current_tau_overall, 1e-6)
@@ -261,17 +309,18 @@ fit_grouped_horseshoes_R <- function(
           post_cov_beta_hs_unscaled_inv <- chol2inv(chol_attempt)
           rhs_mean <- t(X_hs) %*% (w_vec * z_for_hs)
           post_mean_beta_hs <- post_cov_beta_hs_unscaled_inv %*% rhs_mean
+          # Assuming MASS is loaded
           Beta_hs <- MASS::mvrnorm(n = 1, mu = as.vector(post_mean_beta_hs), Sigma = scale_factor * post_cov_beta_hs_unscaled_inv) 
         }
       }
-      if (family == "gaussian") { 
-      eta_hs_part_new <- if(p_hs_total > 0) as.vector(X_hs %*% Beta_hs) else rep(0, N)
-      eta_new <- alpha_global + Z_vec * aleph + eta_hs_part_new
-      residuals_for_sigma <- y_vec - eta_new
-      shape_sigma_post <- 0.001 + N / 2
-      rate_sigma_post <- 0.001 + 0.5 * sum(residuals_for_sigma^2)
-      sigma_sq <- rinvgamma_R(1, shape = shape_sigma_post, scale = rate_sigma_post)
-      sigma_sq <- max(sigma_sq, 1e-9)
+      if ((family == "gaussian") & sample_sigma) { 
+        eta_hs_part_new <- if(p_hs_total > 0) as.vector(X_hs %*% Beta_hs) else rep(0, N)
+        eta_new <- alpha_global + Z_vec * aleph + eta_hs_part_new
+        residuals_for_sigma <- y_vec - eta_new
+        shape_sigma_post <- 0.001 + N / 2
+        rate_sigma_post <- 0.001 + 0.5 * sum(residuals_for_sigma^2)
+        sigma_sq <- rinvgamma_R(1, shape = shape_sigma_post, scale = rate_sigma_post)
+        sigma_sq <- max(sigma_sq, 1e-9)
       }
       # End of inner MCMC logic
       
@@ -329,20 +378,22 @@ fit_grouped_horseshoes_R <- function(
     combined_sigma_sq_samples <- do.call(c, lapply(all_chains_results, `[[`, "sigma_sq"))
   }
   
-  # --- Unpack Combined Samples into Named Components ---
-  # Define indices based on the structure of X_hs
-  num_beta_main <- if(!is.null(X_prog_list$beta)) ncol(X_prog_list$beta) else 0
-  num_beta_prop <- if(!is.null(X_prog_list$beta_propensity)) 1 else 0 # It's one column if it exists
-  num_beta_int  <- if(!is.null(X_prog_list$beta_int)) ncol(X_prog_list$beta_int) else 0
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  # --- Unpack Combined Samples (REWRITTEN FOR ROBUSTNESS) ---
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   
+  # Define number of columns for each component based on the matrices created earlier
+  num_beta_main <- if(!is.null(X_beta_main_mat)) ncol(X_beta_main_mat) else 0
+  num_beta_prop <- if(!is.null(propensity_scores)) 1 else 0
+  num_beta_int  <- if(!is.null(X_beta_int_mat)) ncol(X_beta_int_mat) else 0
+  num_gamma_main <- if(!is.null(X_gamma_main_mat)) ncol(X_gamma_main_mat) else 0
+  num_gamma_int  <- if(!is.null(X_gamma_int_mat)) ncol(X_gamma_int_mat) else 0
+  
+  # Define indices for slicing the combined Beta_hs and lambda_hs matrices
   idx_current <- 0
   idx_beta <- if(num_beta_main > 0) (idx_current + 1):(idx_current + num_beta_main) else integer(0); idx_current <- idx_current + num_beta_main
   idx_beta_prop <- if(num_beta_prop > 0) (idx_current + 1):(idx_current + num_beta_prop) else integer(0); idx_current <- idx_current + num_beta_prop
   idx_beta_int <- if(num_beta_int > 0) (idx_current + 1):(idx_current + num_beta_int) else integer(0); idx_current <- idx_current + num_beta_int
-  
-  num_gamma_main <- if(!is.null(X_treat_list$gamma)) ncol(X_treat_list$gamma) else 0
-  num_gamma_int  <- if(!is.null(X_treat_list$gamma_int)) ncol(X_treat_list$gamma_int) else 0
-  
   idx_gamma <- if(num_gamma_main > 0) (idx_current + 1):(idx_current + num_gamma_main) else integer(0); idx_current <- idx_current + num_gamma_main
   idx_gamma_int <- if(num_gamma_int > 0) (idx_current + 1):(idx_current + num_gamma_int) else integer(0)
   
@@ -361,11 +412,11 @@ fit_grouped_horseshoes_R <- function(
   lambda_gamma_int_out <- if(length(idx_gamma_int) > 0) combined_lambda_hs_samples[idx_gamma_int, , drop=FALSE] else matrix(0,0,eff_samp_count * num_chains)
   
   # Set names for output matrices
-  if(nrow(beta_out) > 0) rownames(beta_out) <- colnames(X_prog_list$beta)
+  if(nrow(beta_out) > 0) rownames(beta_out) <- colnames(X_beta_main_mat)
   if(nrow(beta_prop_out) > 0) rownames(beta_prop_out) <- "propensity_score"
-  if(nrow(beta_int_out) > 0) rownames(beta_int_out) <- colnames(X_prog_list$beta_int)
-  if(nrow(gamma_out) > 0) rownames(gamma_out) <- colnames(X_treat_list$gamma)
-  if(nrow(gamma_int_out) > 0) rownames(gamma_int_out) <- colnames(X_treat_list$gamma_int)
+  if(nrow(beta_int_out) > 0) rownames(beta_int_out) <- colnames(X_beta_int_mat)
+  if(nrow(gamma_out) > 0) rownames(gamma_out) <- colnames(X_gamma_main_mat)
+  if(nrow(gamma_int_out) > 0) rownames(gamma_int_out) <- colnames(X_gamma_int_mat)
   
   output <- list(
     alpha = combined_alpha_samples,
@@ -394,27 +445,3 @@ fit_grouped_horseshoes_R <- function(
   
   return(output)
 }
-
-data <- generate_data_2(250, is_te_hetero = T, is_mu_nonlinear = T, seed = 31, RCT = FALSE, z_diff = F, tian = F)
-fit_grouped_hs <- fit_grouped_horseshoes_R(
-  y_vec = as.numeric(data$y),
-  X_mat = as.matrix(sapply(data[, c(1:6)], as.numeric)),
-  Z_vec = as.numeric(data$z),
-  family = "gaussian",
-  n_iter = 4000, 
-  burn_in = 1000,
-  num_chains = 2,
-  propensity_as_covariate = T,
-  method_tau_prognostic = "halfCauchy", tau_prognostic_init = 0.1,
-  method_tau_treatment = "halfCauchy", tau_treatment_init = 0.1,
-  method_tau_overall = "fixed", tau_overall_init = 1,
-  alpha_global_prior_sd = 5.0,
-  aleph_prior_sd = 5.0,
-  thin = 1,
-  seed = 31,
-  verbose = F,
-  ping = 100
-)
-
-hist(fit_grouped_hs$beta[,5])
-summary(fit_grouped_hs$lambda_beta)
