@@ -1,5 +1,6 @@
 source('R/simul_1.R')
 source('R/test_logit_2.R')
+source('R/old_linear_linear.R')
 data <- generate_data_2(500, is_te_hetero = T, is_mu_nonlinear = T, seed = 40, RCT = FALSE, z_diff = 0, contrast_binary = T)
 X <- as.matrix(sapply(data[, c(1:6)], as.numeric))
 y <- as.numeric(data$y)
@@ -22,7 +23,7 @@ time.taken <- end.time - start.time
 time.taken
 summary(test_linked$sigma_sq)
 ###############################################################
-data <- generate_data_2(250, is_te_hetero = T, is_mu_nonlinear = T, seed = 1848, RCT = FALSE, z_diff = F, tian = F)
+data <- generate_data_2(500, is_te_hetero = T, is_mu_nonlinear = T, seed = 1848, RCT = FALSE, z_diff = 0, tian = F)
 fit_grouped_hs <- fit_grouped_horseshoes_R(
   y_vec = as.numeric(data$y),
   X_mat = as.matrix(sapply(data[, c(1:6)], as.numeric)),
@@ -45,6 +46,10 @@ fit_grouped_hs <- fit_grouped_horseshoes_R(
   interaction_rule ="continuous_or_binary",
   cat_coding_method = "difference"
 )
+summary(fit_grouped_hs$gamma)
+
+
+
 ###############################################################
 
 library(stochtree)
@@ -60,21 +65,29 @@ general_params_default <- list(
   treated_coding_init = 0.5, rfx_prior_var = NULL, 
   random_seed = 30, keep_burnin = FALSE, keep_gfr = FALSE, 
   keep_every = 1, num_chains = 1, verbose = T, 
-  global_shrinkage = T, unlink = T, propensity_seperate = F, gibbs = T, step_out = 0.5, max_steps = 50, save_output = F, probit_outcome_model = F, interaction_rule = "continuous_or_binary",standardize_cov = F, simple_prior = F
+  global_shrinkage = T, unlink = T, propensity_seperate = "none", gibbs = T, step_out = 0.5, max_steps = 50, save_output = F, probit_outcome_model = F, interaction_rule = "continuous_or_binary",standardize_cov = F, simple_prior = F, save_partial_residual = T
 )
 #'all'
 #
-data <- generate_data_2(500, is_te_hetero = T, is_mu_nonlinear = F, seed = 30, RCT = FALSE, z_diff = 0, BCF = F,  sigma_sq =1)
-# data$z <- data$z -0.5
+data <- generate_data_2(500, is_te_hetero = T, is_mu_nonlinear = F, seed = 45, RCT = T, z_diff = 0, BCF = F,  sigma_sq =1)
+data$z <- data$z -0.5
 nbcf_fit <- bcf_linear_probit(
   X_train = as.matrix(sapply(data[, c(1:6)], as.numeric)),
   y_train = as.numeric(data$y),
   Z_train = as.numeric(data$z), 
   num_gfr = 25, 
   num_burnin = 1000, 
-  num_mcmc = 4000, 
+  num_mcmc = 1500, 
   general_params = general_params_default
 )
+
+residuals <- rowMeans(nbcf_fit$partial_residuals[,,])
+
+propensity_train <- rowMeans(nbcf_fit$bart_propensity_model$y_hat_train)
+mean(residuals)
+plot(residuals, propensity_train)
+
+# hist(nbcf_fit$gamma[1,]*sd(data$y))
 # load("D:/block_horseshoe/Block_horse_fit_heter_T_linear_F_n_500_sim_2.Rdata")
 # data <- generate_data_2(500, is_te_hetero =  T, is_mu_nonlinear = F, seed = 3, RCT = FALSE)
 chain_1 <- as.mcmc(nbcf_fit$Beta_int[1,,]*sd(data$y))
@@ -93,7 +106,7 @@ library(stochtree)
 
 source("C:/Users/P094412/Documents/bcf-linear/R/simul_1.R")
 
-data <- generate_data_2(500, is_te_hetero = T, is_mu_nonlinear = T, seed = 1848, RCT = FALSE, z_diff = 0.25, contrast_binary = F, BCF = T, sigma_sq = 2)
+data <- generate_data_2(500, is_te_hetero = T, is_mu_nonlinear = T, seed = 1848, RCT = FALSE, z_diff = 0, contrast_binary = T, BCF = T, sigma_sq = 2)
 general_params_default <- list(
   cutpoint_grid_size = 100, standardize = TRUE, 
   sample_sigma2_global = TRUE, sigma2_global_init = NULL, 

@@ -95,6 +95,108 @@ generate_data <- function(n = 250,
 }
 
 generate_data_2 <- function(n = 250,
+                            is_te_hetero = FALSE,  
+                            is_mu_nonlinear = TRUE, seed = 1848, RCT = FALSE, test = FALSE, z_diff = F, tian = F, contrast_binary = T, BCF = F, sigma_sq = 1) {
+  set.seed(seed)
+  
+  # -- 1. Generate covariates --
+  x1 <- rnorm(n, mean=0, sd=1)
+  x2 <- rnorm(n, mean=0, sd=1)
+  x3 <- rnorm(n, mean=0, sd=1)
+  x4 <- rbinom(n, size=1, prob=0.5)
+  if(contrast_binary){
+    x4 <- 2 * x4 - 1
+  }
+  x5_raw <- sample(1:3, size=n, replace=TRUE, prob=c(1/3,1/3,1/3))
+  
+  # Define function for categorical effect
+  g_func <- function(x5) {
+    out <- rep(NA, length(x5))
+    out[x5 == 1] <-  2
+    out[x5 == 2] <- -1
+    out[x5 == 3] <- -4
+    return(out)
+  }
+  
+  g_x5 <- g_func(x5_raw)
+  if (!is_mu_nonlinear) {
+    mu <- 1 + g_x5 + x1*x3
+  } else {
+    mu <- -6 + g_x5 + 6*abs(x3 - 1)
+  }
+  
+  # -- 3. Treatment effect tau(x) --
+  if (!is_te_hetero) {
+    tau_vec <- rep(3, n)
+  } else {
+    if(test){
+      tau_vec <- 1 + 4*x1 + 3*x2 + 2*x2*x1
+    } else {
+      tau_vec <- 1 + 2*x2*x4
+    }
+  }
+  
+  # -- 4. Compute standard deviation 's' of mu --
+  s <- sd(mu)
+  
+  # -- 5. Propensity function --
+  u_i <- runif(n, 0, 1)
+  Phi <- function(z) pnorm(z, mean=0, sd=1)
+  
+  if (RCT) {
+    pi_x <- rep(0.5, n)
+  } else {
+    pi_x <- 0.8 * Phi((3*mu)/s - 0.5*x1) + 0.05 + (u_i / 10)
+  }
+  
+  pi_x <- pmin(pmax(pi_x, 0), 1)
+  z <- rbinom(n, size=1, prob=pi_x)
+  # -- 6. Treatment assignment --
+  eps <- rnorm(n, 0, sqrt(sigma_sq))
+  if(BCF){
+    z_binary <- z
+  }
+  if(z_diff == T){
+    delta <- 0.5
+  } else if(z_diff == F){
+    delta <- 0 
+  } else {
+    delta <- z_diff
+  }
+  
+  if(z_diff){
+    z <- z - delta
+  }
+ 
+  y <- mu + z*tau_vec + eps
+  y_hat <- mu + z*tau_vec
+  x5_factor <- factor(x5_raw, levels = c(1, 2, 3))
+  contrasts(x5_factor) <- contr.sum(3)
+  x5_dev <- model.matrix(~ x5_factor, data = data.frame(x5_factor))
+  x5_dev <- x5_dev[, -1]  # Remove intercept (which is all ones)
+  colnames(x5_dev) <- c("x5_1", "x5_2")
+  if(BCF){
+    z <- z_binary
+  }
+  df <- data.frame(
+    x1 = x1, 
+    x2 = x2, 
+    x3 = x3,
+    x4 = x4,
+    x5_1 = x5_dev[, 1],  # Deviance coding for level 1
+    x5_2 = x5_dev[, 2],  # Deviance coding for level 2
+    z  = z,
+    y  = y,
+    mu = mu,
+    pi_x = pi_x, 
+    tau = tau_vec,
+    y_hat = y_hat
+  )
+  
+  return(df)
+}
+
+generate_data_3 <- function(n = 250,
                             is_te_hetero = FALSE,  # toggles homogeneous vs heterogeneous
                             is_mu_nonlinear = TRUE, seed = 1848, RCT = FALSE, test = FALSE, z_diff = F, tian = F, contrast_binary = T) {
   set.seed(seed)
@@ -168,7 +270,7 @@ generate_data_2 <- function(n = 250,
   
   colnames(x5_dev) <- c("x5_1", "x5_2")
   if(z_diff){
-     z <- z - 0.5 
+    z <- z - 0.5 
   }
   df <- data.frame(
     x1 = x1, 
