@@ -2,9 +2,9 @@ source('R/simul_1.R')
 library(stochtree)
 
 n_simul <- 50
-heter <- c(FALSE)
-linear <-c(FALSE)
-n  <- c(250, 500)
+heter <- c(TRUE,FALSE)
+linear <-c(TRUE,FALSE)
+n  <- c(250,500)
 
 for(het in heter){
   for(lin in linear){
@@ -18,12 +18,12 @@ for(het in heter){
             variable_weights = NULL, propensity_covariate = "mu", 
             adaptive_coding = FALSE, control_coding_init = -0.5, 
             treated_coding_init = 0.5, rfx_prior_var = NULL, 
-            random_seed = i, keep_burnin = FALSE, keep_gfr = FALSE, 
-            keep_every = 1, num_chains = 2, verbose = F, 
-            global_shrinkage = F, unlink = F, propensity_seperate = F, gibbs = F, step_out = 0.5, max_steps = 50, save_output = F, probit_outcome_model = F, interaction_rule = "continuous_or_binary",standardize_cov = F
+            random_seed = 30, keep_burnin = FALSE, keep_gfr = FALSE, 
+            keep_every = 1, num_chains = 1, verbose = T, 
+            global_shrinkage = T, unlink = T, propensity_seperate = "none", gibbs = T, step_out = 0.5, max_steps = 50, save_output = F, probit_outcome_model = F, interaction_rule = "continuous_or_binary",standardize_cov = F, simple_prior = F, save_partial_residual = T
           )
-          data <- generate_data_2(n_obser, is_te_hetero = het, is_mu_nonlinear = lin, seed = i, RCT = FALSE, z_diff = F)
-          
+          data <- generate_data_2(n_obser, is_te_hetero = het, is_mu_nonlinear = lin, seed = i, RCT = FALSE, z_diff = 0.5, tian = F)
+          X_train <- standardize_X_by_index(as.matrix(sapply(data[, c(1:6)], as.numeric)), process_data = F, interaction_rule = "continuous_or_binary", cat_coding_method = "difference" )
           nbcf_fit <- bcf_linear_probit(
             X_train = as.matrix(sapply(data[, c(1:6)], as.numeric)),
             y_train = as.numeric(data$y),
@@ -34,7 +34,7 @@ for(het in heter){
             general_params = general_params_default
           )
           # Generate a dynamic filename based on model settings
-          filename <- sprintf("D:/Block_linked/Block_linked_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata", 
+          filename <- sprintf("E:/block_linked/Block_link_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata", 
                               ifelse(het, "T", "F"), 
                               ifelse(lin, "T", "F"), 
                               n_obser, 

@@ -54,7 +54,7 @@ summary(fit_grouped_hs$gamma)
 
 library(stochtree)
 library(coda)
-source("C:/Users/P094412/Documents/bcf-linear/R/simul_1.R")
+source("R/simul_1.R")
 
 general_params_default <- list(
   cutpoint_grid_size = 100, standardize = TRUE, 
@@ -65,19 +65,18 @@ general_params_default <- list(
   treated_coding_init = 0.5, rfx_prior_var = NULL, 
   random_seed = 30, keep_burnin = FALSE, keep_gfr = FALSE, 
   keep_every = 1, num_chains = 1, verbose = T, 
-  global_shrinkage = T, unlink = T, propensity_seperate = "none", gibbs = T, step_out = 0.5, max_steps = 50, save_output = F, probit_outcome_model = F, interaction_rule = "continuous_or_binary",standardize_cov = F, simple_prior = F, save_partial_residual = T
+  global_shrinkage = T, unlink = T, propensity_seperate = "tau", gibbs = T, step_out = 0.5, max_steps = 50, save_output = F, probit_outcome_model = F, interaction_rule = "continuous_or_binary",standardize_cov = F, simple_prior = F, save_partial_residual = T, regularize_ATE = F
 )
 #'all'
 #
-data <- generate_data_2(500, is_te_hetero = T, is_mu_nonlinear = F, seed = 45, RCT = T, z_diff = 0, BCF = F,  sigma_sq =1)
-data$z <- data$z -0.5
+data <- generate_data_2(500, is_te_hetero = T, is_mu_nonlinear = F, seed = 42, RCT = F, z_diff = 0.5, BCF = F,  sigma_sq =1)
 nbcf_fit <- bcf_linear_probit(
   X_train = as.matrix(sapply(data[, c(1:6)], as.numeric)),
   y_train = as.numeric(data$y),
   Z_train = as.numeric(data$z), 
   num_gfr = 25, 
   num_burnin = 1000, 
-  num_mcmc = 1500, 
+  num_mcmc = 3000, 
   general_params = general_params_default
 )
 
@@ -85,7 +84,7 @@ residuals <- rowMeans(nbcf_fit$partial_residuals[,,])
 
 propensity_train <- rowMeans(nbcf_fit$bart_propensity_model$y_hat_train)
 mean(residuals)
-plot(residuals, propensity_train)
+plot(residuals, data$pi_x)
 
 # hist(nbcf_fit$gamma[1,]*sd(data$y))
 # load("D:/block_horseshoe/Block_horse_fit_heter_T_linear_F_n_500_sim_2.Rdata")

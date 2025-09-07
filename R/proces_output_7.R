@@ -8,11 +8,12 @@ library(MASS)
 library(stochtree)
 source("R/simul_1.R")
 
-# --- Helper Functions (as provided in your script) ---
+# --- Helper Functions  ---
 compute_mode <- function(x) {
-  if (any(is.na(x))) return(NA)
-  d <- density(x)
-  d$x[which.max(d$y)]
+  # if (any(is.na(x))) return(NA)
+  # d <- density(x)
+  # d$x[which.max(d$y)]
+  return (mean(x))
 }
 
 compute_metrics <- function(true_values, estimates, ci_lower, ci_upper, file_name) {
@@ -77,7 +78,7 @@ for (n_obser in n_values) {
       
       for (i in 1:n_simul) {
         file_name <- sprintf(
-          "D:/block_horseshoe/Block_horse_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata",
+          "E:/block_horseshoe/Block_horse_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata",
           ifelse(het, "T", "F"), ifelse(lin, "T", "F"), n_obser, i
         )
         
