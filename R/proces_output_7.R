@@ -10,9 +10,6 @@ source("R/simul_1.R")
 
 # --- Helper Functions  ---
 compute_mode <- function(x) {
-  # if (any(is.na(x))) return(NA)
-  # d <- density(x)
-  # d$x[which.max(d$y)]
   return (mean(x))
 }
 
@@ -61,7 +58,7 @@ results <- expand.grid(n = n_values,
 # INITIALIZE a list to store the new detailed data for plotting
 all_scenario_results_list <- list()
 
-
+num_chains <- 1 
 # 2. SIMULATION LOOPS
 # --------------------------------------------------------------------------
 # Loop over all model settings
@@ -78,7 +75,7 @@ for (n_obser in n_values) {
       
       for (i in 1:n_simul) {
         file_name <- sprintf(
-          "E:/block_horseshoe/Block_horse_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata",
+          "D:/block_linked/Block_link_fit_heter_%s_linear_%s_n_%d_sim_%d.Rdata",
           ifelse(het, "T", "F"), ifelse(lin, "T", "F"), n_obser, i
         )
         
@@ -104,8 +101,8 @@ for (n_obser in n_values) {
           true_ate <- mean(true_cate)
           
           alpha_samples <- as.vector(t(nbcf_fit$alpha))
-          beta_samples <- do.call(rbind, lapply(1:2, function(chain) nbcf_fit$Beta[chain, , ]))
-          beta_int_samples <- do.call(rbind, lapply(1:2, function(chain) nbcf_fit$Beta_int[chain, , ]))
+          beta_samples <- do.call(rbind, lapply(1:num_chains, function(chain) nbcf_fit$Beta[chain, , ]))
+          beta_int_samples <- do.call(rbind, lapply(1:num_chains, function(chain) nbcf_fit$Beta_int[chain, , ]))
           
           sd_y <- sd(data$y)
           alpha_samples <- alpha_samples * sd_y

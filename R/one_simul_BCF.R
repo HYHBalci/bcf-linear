@@ -7,11 +7,6 @@ library(ggplot2)
 library(stochtree)
 library(MASS)
 source('R/simul_1.R')
-# library(stochtree) # Uncomment if standardize_X_by_index or other functions require it
-
-# --- Source necessary files ---
-# Ensure this path points to the file containing generate_data_2 and standardize_X_by_index
-# source("R/simul_1.R")
 
 # --- Helper Functions (copied from original script) ---
 compute_mode <- function(x) {
@@ -42,20 +37,17 @@ interaction_pairs <- function(num_covariates, boolean_vector) {
 
 # 2. CONFIGURATION FOR SINGLE RUN ANALYSIS
 # --------------------------------------------------------------------------
-
-
-
 # 3. CORE EVALUATION LOGIC
 # --------------------------------------------------------------------------
-scenario_n <- 500
-data <- generate_data_2(scenario_n, is_te_hetero = F, is_mu_nonlinear = T, seed = 31, RCT = F, z_diff = 0.5, BCF = F,  sigma_sq =1)
+scenario_n <- 250
+data <- generate_data_2(scenario_n, is_te_hetero = T, is_mu_nonlinear = T, seed = 42, RCT = F, z_diff = 0.5, BCF = T,  sigma_sq =1)
 
 general_params_default <- list(
   cutpoint_grid_size = 100, standardize = TRUE, 
   sample_sigma2_global = TRUE, sigma2_global_init = NULL, 
   sigma2_global_shape = 0, sigma2_global_scale = 0, 
   variable_weights = NULL, propensity_covariate = "mu", 
-  adaptive_coding = F, control_coding_init = -0.5, 
+  adaptive_coding = T, control_coding_init = -0.5, 
   treated_coding_init = 0.5, rfx_prior_var = NULL, 
   random_seed = -1, keep_burnin = FALSE, keep_gfr = FALSE, 
   keep_every = 1, num_chains = 1, verbose = TRUE, 
@@ -65,6 +57,7 @@ nbcf_fit <- bcf(
   X_train = as.matrix(sapply(data[, c(1:6)], as.numeric)),
   y_train = as.numeric(data$y),
   Z_train = as.numeric(data$z), 
+  propensity_train = as.numeric(data$pi_x),
   num_gfr = 25, 
   num_burnin = 0, 
   num_mcmc = 500,
@@ -109,17 +102,38 @@ plot_data <- data.frame(
   ci_upper = ci_tau_upper
 )
 
-# Scatter plot of True CATE vs. Estimated CATE
+# --- Create the text label for the plot ---
+rmse_label <- paste(
+  paste("ATE RMSE:", round(ate_metrics$rmse, 3)),
+  paste("CATE RMSE:", round(cate_metrics$rmse, 3)),
+  sep = "\n" # Put them on separate lines
+)
+
+# Scatter plot of True CATE vs. Estimated CATE with 95% credible intervals
 cate_plot <- ggplot(plot_data, aes(x = true_cate, y = estimated_cate)) +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.0, alpha = 0.3, color = "gray50") +
   geom_point(alpha = 0.6, color = "blue") +
   geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "red") +
   geom_smooth(method = "lm", formula = y ~ x, color = "black", se = FALSE) +
-  labs(
-    title = "True vs. Estimated CATE",
-    subtitle = paste("File:"),
-    x = "True Treatment Effect",
-    y = "Estimated Treatment Effect (Posterior Mean)"
+  # --- ADDED: Annotate plot with RMSE values ---
+  annotate(
+    geom = "text",
+    x = -Inf,        # Position horizontally at the far left
+    y = Inf,         # Position vertically at the very top
+    label = rmse_label,
+    hjust = -0.1,    # Adjust to push text right from the edge
+    vjust = 1.5,     # Adjust to push text down from the edge
+    size = 4,
+    color = "black",
+    fontface = "bold"
   ) +
-  theme_minimal()
+  labs(
+    title = "True vs. Estimated CATE with 95% Credible Intervals for BCF-standard.",
+    subtitle = "Points represent posterior means, error bars represent 95% credible intervals. n = 500.",
+    x = "True Treatment Effect",
+    y = "Estimated Treatment Effect"
+  ) +
+  theme_minimal() +
+  coord_fixed() # Ensures the 1:1 line is at a 45-degree angle
 
 print(cate_plot)
