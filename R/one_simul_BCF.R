@@ -137,3 +137,68 @@ cate_plot <- ggplot(plot_data, aes(x = true_cate, y = estimated_cate)) +
   coord_fixed() # Ensures the 1:1 line is at a 45-degree angle
 
 print(cate_plot)
+
+# 5. FRIEDMAN PARTIAL DEPENDENCE PLOT (CORRECTED)
+# --------------------------------------------------------------------------
+cat("\nGenerating Friedman partial dependence plot for x1 and x4...\n")
+
+# --- Define the grid of values for x1 and x4 to evaluate ---
+grid_size <- 20
+x1_grid <- seq(min(data[, 1]), max(data[, 1]), length.out = grid_size)
+x4_grid <- seq(min(data[, 4]), max(data[, 4]), length.out = grid_size)
+
+# --- Create a matrix to store the results ---
+pd_values <- matrix(NA, nrow = grid_size, ncol = grid_size)
+
+# --- Loop through each point in the grid ---
+for (i in 1:grid_size) {
+  for (j in 1:grid_size) {
+    # 1. Create a temporary copy of the original data
+    temp_data <- data
+    
+    # 2. Set x1 and x4 to the current grid values
+    temp_data[, 1] <- x1_grid[i]
+    temp_data[, 4] <- x4_grid[j]
+    
+    # Create the new covariate matrix
+    X_new <- as.matrix(sapply(temp_data[, c(1:6)], as.numeric))
+    
+    # 3. Predict potential outcome if EVERYONE was TREATED (Z=1)
+    y_hat_treated <- predict(
+      object = nbcf_fit, 
+      X = X_new,
+      Z = rep(1, nrow(X_new)),
+      propensity = as.numeric(temp_data$pi_x)
+    )
+    
+    # 4. Predict potential outcome if EVERYONE was CONTROL (Z=0)
+    y_hat_control <- predict(
+      nbcf_fit,
+      X_test = X_new,
+      Z_test = rep(0, nrow(X_new)),
+      pi_test = as.numeric(temp_data$pi_x)
+    )
+    
+    # 5. The CATE is the difference. We average this across all individuals.
+    cate_estimates <- y_hat_treated - y_hat_control
+    pd_values[i, j] <- mean(cate_estimates)
+  }
+}
+
+# --- Prepare the results for plotting with ggplot ---
+pd_df <- expand.grid(x1 = x1_grid, x4 = x4_grid)
+pd_df$cate <- as.vector(pd_values)
+
+# --- Create the heatmap plot ---
+pdp_plot <- ggplot(pd_df, aes(x = x1, y = x4, fill = cate)) +
+  geom_raster() +
+  scale_fill_viridis_c(name = "Average CATE\n(Partial Dependence)") +
+  labs(
+    title = "Friedman Partial Dependence Plot for x1 and x4",
+    subtitle = "Shows the marginal effect of x1 and x4 on the treatment effect estimate.",
+    x = "Value of x1",
+    y = "Value of x4"
+  ) +
+  theme_minimal()
+
+print(pdp_plot)

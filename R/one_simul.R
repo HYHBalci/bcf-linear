@@ -57,12 +57,12 @@ num_chains <- 1
   treated_coding_init = 0.5, rfx_prior_var = NULL, 
   random_seed = 30, keep_burnin = FALSE, keep_gfr = FALSE, 
   keep_every = 1, num_chains = num_chains, verbose = T, 
-  global_shrinkage = F, unlink = T, propensity_seperate = "mu", gibbs = T, step_out = 0.5, max_steps = 50, save_output = F, probit_outcome_model = F, interaction_rule = "continuous_or_binary",standardize_cov = F, simple_prior = T, save_partial_residual = F, regularize_ATE = F
+  global_shrinkage = F, unlink = T, propensity_seperate = "none", gibbs = T, step_out = 0.5, max_steps = 50, save_output = F, probit_outcome_model = F, interaction_rule = "continuous_or_binary",standardize_cov = F, simple_prior = F, save_partial_residual = F, regularize_ATE = F
 )
 #'all'
 #
-scenario_n <- 500
-data <- generate_data_2(scenario_n, is_te_hetero = T, is_mu_nonlinear = F, seed = 10, RCT = F, z_diff = 0.5, BCF = F,  sigma_sq =1)
+scenario_n <- 250
+data <- generate_data_2(scenario_n, is_te_hetero = T, is_mu_nonlinear = T, seed = 10, RCT = F, z_diff = 0.5, BCF = F,  sigma_sq =1)
 nbcf_fit <- bcf_linear_probit(
   X_train = as.matrix(sapply(data[, c(1:6)], as.numeric)),
   y_train = as.numeric(data$y),
