@@ -9,6 +9,7 @@ z <- as.numeric(data$z)
 start.time <- Sys.time()
 test_linked <- linear_linear_function(
     y_vec = y, X_mat = X, Z_vec = z,
+    propensity_train = data$
     family = "gaussian",
     n_iter = 4000, burn_in = 1000,
     prognostic_shrinkage = "horseshoe",
@@ -23,11 +24,12 @@ time.taken <- end.time - start.time
 time.taken
 summary(test_linked$sigma_sq)
 ###############################################################
-data <- generate_data_2(500, is_te_hetero = T, is_mu_nonlinear = T, seed = 1848, RCT = FALSE, z_diff = 0, tian = F)
+data <- generate_data_2(500, is_te_hetero = T, is_mu_nonlinear = T, seed = 1848, RCT = FALSE, z_diff = 0.5)
 fit_grouped_hs <- fit_grouped_horseshoes_R(
   y_vec = as.numeric(data$y),
   X_mat = as.matrix(sapply(data[, c(1:6)], as.numeric)),
   Z_vec = as.numeric(data$z),
+  propensity_train = as.numeric(data$pi_x),
   family = "gaussian",
   n_iter = 4000, 
   burn_in = 1000,
@@ -35,18 +37,18 @@ fit_grouped_hs <- fit_grouped_horseshoes_R(
   propensity_as_covariate = T,
   method_tau_prognostic = "halfCauchy", tau_prognostic_init = 0.1,
   method_tau_treatment = "halfCauchy", tau_treatment_init = 0.1,
-  method_tau_overall = "fixed", tau_overall_init = 1,
+  method_tau_overall = "halfCauchy", tau_overall_init = 1,
   alpha_global_prior_sd = 5.0,
   aleph_prior_sd = 5.0,
   thin = 1,
-  seed = i,
-  verbose = F,
-  ping = 1,
+  seed = 231,
+  verbose = T,
+  ping = 1000,
   standardize_cov = F,
   interaction_rule ="continuous_or_binary",
   cat_coding_method = "difference"
 )
-summary(fit_grouped_hs$gamma)
+summary(fit_grouped_hs$gamma_int)
 
 
 
