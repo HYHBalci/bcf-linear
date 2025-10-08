@@ -24,7 +24,7 @@ time.taken <- end.time - start.time
 time.taken
 summary(test_linked$sigma_sq)
 ###############################################################
-data <- generate_data_2(500, is_te_hetero = T, is_mu_nonlinear = T, seed = 1848, RCT = FALSE, z_diff = 0.5)
+data <- generate_data_2(2000, is_te_hetero = T, is_mu_nonlinear = F, seed = 31, RCT = FALSE, z_diff = 0.5)
 fit_grouped_hs <- fit_grouped_horseshoes_R(
   y_vec = as.numeric(data$y),
   X_mat = as.matrix(sapply(data[, c(1:6)], as.numeric)),
@@ -35,9 +35,9 @@ fit_grouped_hs <- fit_grouped_horseshoes_R(
   burn_in = 1000,
   num_chains = 2,
   propensity_as_covariate = T,
-  method_tau_prognostic = "halfCauchy", tau_prognostic_init = 0.1,
-  method_tau_treatment = "halfCauchy", tau_treatment_init = 0.1,
-  method_tau_overall = "halfCauchy", tau_overall_init = 1,
+  method_tau_prognostic = "halfCauchy", tau_prognostic_init = 1,
+  method_tau_treatment = "halfCauchy", tau_treatment_init = 1,
+  method_tau_overall = "fixed", tau_overall_init = 1,
   alpha_global_prior_sd = 5.0,
   aleph_prior_sd = 5.0,
   thin = 1,
@@ -48,10 +48,13 @@ fit_grouped_hs <- fit_grouped_horseshoes_R(
   interaction_rule ="continuous_or_binary",
   cat_coding_method = "difference"
 )
-summary(fit_grouped_hs$gamma_int)
+summary(fit_grouped_hs$gamma_int) #interaction term tau(x)
+summary(fit_grouped_hs$gamma) #main effect tau(x)
+summary(fit_grouped_hs$aleph) # intercept tau(x)
 
-
-
+summary(fit_grouped_hs$alpha) #intercept mu(x)
+summary(fit_grouped_hs$beta) #main effect (mu(x))
+summary(fit_grouped_hs$beta_int) #interaction (mu(X))
 ###############################################################
 
 library(stochtree)

@@ -45,6 +45,7 @@ safe_var_R <- function(x) {
 #' @param y_vec Response vector. Binary (0s and 1s) for binomial, continuous for gaussian.
 #' @param X_mat Covariate matrix.
 #' @param Z_vec Binary treatment indicator vector (0s and 1s).
+#' @param propensity_train propensity_train. 
 #' @param family Model family, either "binomial" (default) or "gaussian".
 #' @param n_iter Total MCMC iterations.
 #' @param burn_in Number of burn-in iterations.
@@ -70,7 +71,7 @@ safe_var_R <- function(x) {
 #' @importFrom stats rgamma rexp runif pgamma qgamma rnorm var
 
 fit_grouped_horseshoes_R <- function(
-    y_vec, X_mat, Z_vec,
+    y_vec, X_mat, Z_vec, propensity_train = NULL,
     family = c("binomial", "gaussian"),
     n_iter, burn_in, num_chains = 1, propensity_as_covariate = T,
     method_tau_prognostic = c("halfCauchy", "truncatedCauchy", "fixed"), tau_prognostic_init = 1.0,
@@ -130,20 +131,19 @@ fit_grouped_horseshoes_R <- function(
   # --- Propensity Score Estimation (if requested) ---
   propensity_scores <- NULL
   if (propensity_as_covariate) {
-    if (verbose){
-      message("Estimating propensity scores to use as a covariate...")
-      print(dim(X_mat))
-      print(dim(Z_vec))
+    if(is.null(propensity_train)){
+      if (verbose) message("Estimating propensity scores to use as a covariate...")
+      ps_num_burnin <- 10
+      ps_num_total <- 50
+      bart_model_propensity <- bart(X_train = X_mat_orig, y_train = as.numeric(Z_vec), X_test = NULL, 
+                                    num_gfr = ps_num_total, num_burnin = 0, num_mcmc = 0)
+      propensity_scores <- rowMeans(bart_model_propensity$y_hat_train[,(ps_num_burnin+1):ps_num_total])
+      if (verbose) message("Propensity scores calculated.")
+    } else{
+      propensity_scores <- propensity_train
     }
-    if (!requireNamespace("stochtree", quietly = TRUE)) {
-      stop("Package 'stochtree' needed for propensity score estimation. Please install it.")
-    }
-    # A simple BART model for propensity scores
-    
-    bart_model_propensity <- stochtree::bart(X_train = X_mat_orig, y_train = as.numeric(Z_vec), num_gfr = 50, num_mcmc = 0)
-    propensity_scores <- rowMeans(bart_model_propensity$y_hat_train)
-    if (verbose) message("Propensity scores calculated.")
-  }
+  } 
+  
   
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   # --- 1. Construct Design Matrices (REWRITTEN FOR ROBUSTNESS) ---
