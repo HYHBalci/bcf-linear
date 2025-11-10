@@ -163,15 +163,7 @@ for (n_obser in n_values) {
 # 3. FINAL OUTPUTS
 # --------------------------------------------------------------------------
 save(results, file = 'results_linked.RData')
-# --- 3A. Print the original summary results table ---
 cat("\n\n--- Summary Results Table ---\n")
-# final_summary_table <- results %>%
-#   mutate(heterogeneity = ifelse(heterogeneity, "Heterogeneous", "Homogeneous"),
-#          linearity = ifelse(linearity, "Linear", "Nonlinear")) %>%
-#   arrange(n, heterogeneity, linearity) %>%
-#   select(n, heterogeneity, linearity, everything())
-# 
-# print(results)
 
 
 # --- 3B. Create and print the boxplots from detailed results ---
@@ -213,15 +205,3 @@ metrics_plot <- ggplot(results_long, aes(x = heterogeneity, y = value, fill = li
 
 # Explicitly print the plot
 print(metrics_plot)
-
-
-
-################################################
-library(coda)
-data <- generate_data_2(n = 500, is_te_hetero = TRUE, is_mu_nonlinear = TRUE, seed = 40)
-chain_1 <- as.mcmc(nbcf_fit$Beta[1,,]*sd(data$y))
-summary(chain_1)
-chain_2 <- as.mcmc(nbcf_fit$Beta_int[1,,]*sd(data$y))
-summary(chain_2)
-chain_3 <- as.mcmc(nbcf_fit$alpha[1,]*sd(data$y))
-summary(chain_3)

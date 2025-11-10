@@ -27,7 +27,7 @@ interaction_pairs <- function(num_covariates, boolean_vector) {
   if (num_covariates > 1) {
     for (j in 1:(num_covariates - 1)) {
       for (k in (j + 1):num_covariates) {
-        if (TRUE)
+        if (boolean[j] | boolean[k])
           interaction_list[[length(interaction_list) + 1]] <- c(j, k)
       }
     }

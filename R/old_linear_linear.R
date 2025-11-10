@@ -2,6 +2,7 @@ library(stochtree)
 library(BayesLogit)
 library(MASS)
 library(stochtree)
+sourceCpp("src/horseshoe_samplers.cpp")
 
 create_interaction_pairs_R <- function(p_main_local, boolean_continous) {
   pairs_local <- list()

@@ -123,6 +123,7 @@ generate_data_2 <- function(n = 250,
     mu <- 1 + g_x5 + x1*x3
   } else {
     mu <- -6 + g_x5 + 6*abs(x3 - 1)
+    # mu <- ifelse(x1 > 0.5, 10*(x3 < 0) + 2*(x3 > 0), 5*(x2 < 0) + 2*(x2 > 0))
   }
   
   # -- 3. Treatment effect tau(x) --
