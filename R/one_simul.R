@@ -6,6 +6,8 @@ library(tidyr)
 library(ggplot2)
 library(stochtree)
 library(MASS)
+library(DescTools)
+
 source('R/simul_1.R')
 # library(stochtree) # Uncomment if standardize_X_by_index or other functions require it
 
@@ -15,8 +17,17 @@ source('R/simul_1.R')
 
 # --- Helper Functions (copied from original script) ---
 compute_mode <- function(x) {
-  # Using mean as a proxy for mode per original code.
-  return(median(x))
+
+  d <- density(x)
+  
+  mode_result <- optimise(
+    f = function(val) {
+      -approxfun(d$x, d$y)(val)
+    },
+    interval = range(x)
+  )
+  
+  return(mode_result$minimum)
 }
 
 compute_metrics <- function(true_values, estimates, ci_lower, ci_upper) {
@@ -57,12 +68,12 @@ general_params_default <- list(
   treated_coding_init = 0.5, rfx_prior_var = NULL, 
   random_seed = 1, keep_burnin = FALSE, keep_gfr = FALSE,   #30
   keep_every = 1, num_chains = num_chains, verbose = T, 
-  sample_global_prior = "half-cauchy", unlink = T, propensity_seperate = "none", gibbs = F, step_out = 0.5, max_steps = 50, save_output = F, probit_outcome_model = F, interaction_rule = "continuous_or_binary",standardize_cov = F, simple_prior = T, save_partial_residual = F, regularize_ATE = F,
-  sigma_residual = 0, hn_scale = 0, use_ncf = F
+  sample_global_prior = "half-cauchy", unlink = T, propensity_seperate = "none", gibbs = F, step_out = 0.5, max_steps = 150, save_output = F, probit_outcome_model = F, interaction_rule = "continuous_or_binary",standardize_cov = F, simple_prior = T, save_partial_residual = F, regularize_ATE = F,
+  sigma_residual = 0, hn_scale = 0, use_ncf = T, n_tijn = 1
 )
 prognostic_forest_params_new <- list(
   num_trees = 50, 
-  beta = 3.0, 
+  beta = 2.0, 
   max_depth = 5, 
   alpha = 0.95, 
   min_samples_leaf = 5,
@@ -75,8 +86,8 @@ prognostic_forest_params_new <- list(
 )
 #'all'
 #
-scenario_n <- 2000
-data <- generate_data_2(scenario_n, is_te_hetero = T, is_mu_nonlinear = T, seed = 1848, RCT = F, z_diff = 0.5, BCF = F,  sigma_sq =1)
+scenario_n <- 550
+data <- generate_data_2(scenario_n, is_te_hetero = T, is_mu_nonlinear = T, seed = 12, RCT = F, z_diff = 0.5, BCF = F,  sigma_sq =1)
 
 
 nbcf_fit <- bcf_linear_probit(

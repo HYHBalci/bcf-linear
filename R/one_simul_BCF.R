@@ -40,14 +40,14 @@ interaction_pairs <- function(num_covariates, boolean_vector) {
 # 3. CORE EVALUATION LOGIC
 # --------------------------------------------------------------------------
 scenario_n <- 500
-data <- generate_data_2(scenario_n, is_te_hetero = T, is_mu_nonlinear = T, seed = 25, RCT = F, z_diff = 0.5, BCF = T,  sigma_sq =1)
+data <- generate_data_2(scenario_n, is_te_hetero = T, is_mu_nonlinear = T, seed = 18, RCT = F, z_diff = 0.5, BCF = T,  sigma_sq =1)
 
 general_params_default <- list(
   cutpoint_grid_size = 100, standardize = TRUE, 
   sample_sigma2_global = TRUE, sigma2_global_init = NULL, 
   sigma2_global_shape = 0, sigma2_global_scale = 0, 
-  variable_weights = NULL, propensity_covariate = "none", 
-  adaptive_coding = TRUE, control_coding_init = -0.5, 
+  variable_weights = NULL, propensity_covariate = "mu", 
+  adaptive_coding = FALSE, control_coding_init = -0.5, 
   treated_coding_init = 0.5, rfx_prior_var = NULL, 
   random_seed = -1, keep_burnin = FALSE, keep_gfr = FALSE, 
   keep_every = 1, num_chains = 1, verbose = TRUE, 
@@ -57,7 +57,7 @@ general_params_default <- list(
 nbcf_fit <- bcf(
   X_train = as.matrix(sapply(data[, c(1:6)], as.numeric)),
   y_train = as.numeric(data$y),
-  Z_train = as.numeric(data$z) - as.numeric(data$pi_x), 
+  Z_train = as.numeric(data$z), 
   propensity_train = as.numeric(data$pi_x),
   num_gfr = 25, 
   num_burnin = 0, 
