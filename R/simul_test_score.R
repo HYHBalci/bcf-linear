@@ -14,7 +14,7 @@ source('R/simul_1.R')
 
 # 2. SIMULATION CONFIGURATION
 # --------------------------------------------------------------------------
-num_sims <- 50          # Number of datasets to simulate per configuration (increase for final paper)
+num_sims <- 100          # Number of datasets to simulate per configuration (increase for final paper)
 
 # Define the grid of all scenarios we want to test
 sim_grid <- expand.grid(
@@ -85,6 +85,7 @@ for (s in 1:total_configs) {
         num_gfr = 25, 
         num_burnin = 500, 
         num_mcmc = 2000,
+        use_rao_blackwell = T,
         general_params = general_params_default
       )
     }, error = function(e) {
