@@ -118,10 +118,7 @@ for (b in 1:B) {
   # The exact method used in one_simul.R
   X_info <- standardize_X_by_index(X_initial = X_train, process_data = general_params_default$standardize_cov, 
                                    interaction_rule = general_params_default$interaction_rule, cat_coding_method = "difference")
-  boolean_vector <- as.logical(as.numeric(X_info$X_final_var_info$is_continuous)) + 
-                    as.logical(as.numeric(X_info$X_final_var_info$is_binary))
-  ipairs <- interaction_pairs(ncol(X_train), boolean_vector)
-  
+
   alpha_samples <- as.vector(t(nbcf_fit$alpha))
   beta_samples <- do.call(rbind, lapply(1:num_chains, function(chain) nbcf_fit$Beta[chain, , ]))
   
@@ -163,20 +160,20 @@ for (b in 1:B) {
   
   tau_posterior <- tau_posterior + X_target %*% beta_samples
   
-  if (ncol(ipairs) > 0 && !is.null(nbcf_fit$Beta_int)) {
+  if (!is.null(nbcf_fit$interaction_pairs) && ncol(nbcf_fit$interaction_pairs) > 0) {
     beta_int_samples <- do.call(rbind, lapply(1:num_chains, function(chain) nbcf_fit$Beta_int[chain, , ]))
     beta_int_samples <- beta_int_samples * sd_y
     if (nrow(beta_int_samples) > ncol(beta_int_samples)) {
       beta_int_samples <- t(beta_int_samples)
     }
-    for (idx in 1:ncol(ipairs)) {
-      j <- ipairs[1, idx]
-      k <- ipairs[2, idx]
-      interaction_term_values <- X_train[, j] * X_train[, k]
-      # Multiply robustly: interaction_term_values is n x 1, beta_int_samples is 1 x draws
-      beta_int_idx <- if(is.matrix(beta_int_samples)) beta_int_samples[idx, , drop = FALSE] else matrix(beta_int_samples[idx], nrow=1)
-      tau_posterior <- tau_posterior + matrix(interaction_term_values, ncol=1) %*% beta_int_idx
+    
+    int_pairs <- nbcf_fit$interaction_pairs
+    num_interactions <- ncol(int_pairs)
+    X_int <- matrix(0, nrow = nrow(X_info$X_final), ncol = num_interactions)
+    for (k in 1:num_interactions) {
+      X_int[, k] <- X_info$X_final[, int_pairs[1, k]] * X_info$X_final[, int_pairs[2, k]]
     }
+    tau_posterior <- tau_posterior + (X_int %*% beta_int_samples)
   }
   
   # tau_posterior is now (scenario_n x num_mcmc)

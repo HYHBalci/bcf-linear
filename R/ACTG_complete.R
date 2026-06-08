@@ -120,7 +120,7 @@ predict_linear_bcf_patched <- function(object, X, Z, propensity = NULL, rfx_grou
   
   train_set_metadata <- object$train_set_metadata
   X_processed <- preprocessPredictionData(X, train_set_metadata)
-  X_linear <- X 
+  X_linear <- X_processed 
   
   if (!is.null(Z) && is.null(dim(Z))) Z <- as.matrix(as.numeric(Z))
   if (!is.null(propensity) && is.null(dim(propensity))) propensity <- as.matrix(propensity)
