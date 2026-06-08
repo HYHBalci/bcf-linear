@@ -155,7 +155,17 @@ predict_linear_bcf_patched <- function(object, X, Z, propensity = NULL, rfx_grou
   has_interactions <- !is.null(object$Beta_int) && (dim(object$Beta_int)[3] > 0)
   if (has_interactions) beta_int_samples <- matrix(aperm(object$Beta_int, c(2, 1, 3)), nrow = total_samples)
   
-  linear_pred <- matrix(rep(alpha_samples, each=nrow(X)), nrow=nrow(X)) + as.matrix(X_linear) %*% t(beta_samples)
+  p_beta <- ncol(beta_samples)
+  p_linear <- ncol(X_linear)
+  X_target <- X_linear
+  
+  if (p_beta == p_linear + 1) {
+    X_target <- cbind(1, X_linear)
+  } else if (p_beta != p_linear) {
+    stop(paste("Cannot align X_linear (ncol =", p_linear, ") with beta_samples (ncol =", p_beta, ")"))
+  }
+  
+  linear_pred <- matrix(rep(alpha_samples, each=nrow(X)), nrow=nrow(X)) + as.matrix(X_target) %*% t(beta_samples)
   
   if (has_interactions) {
     int_pairs <- object$interaction_pairs
