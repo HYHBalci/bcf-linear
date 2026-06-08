@@ -116,31 +116,66 @@ for (b in 1:B) {
   
   # C. Reconstruct Posterior CATE Distribution
   # The exact method used in one_simul.R
-  X_info <- standardize_X_by_index(X_initial = X_train, process_data = FALSE, 
-                                   interaction_rule = "continuous", cat_coding_method = "difference")
+  X_info <- standardize_X_by_index(X_initial = X_train, process_data = general_params_default$standardize_cov, 
+                                   interaction_rule = general_params_default$interaction_rule, cat_coding_method = "difference")
   boolean_vector <- as.logical(as.numeric(X_info$X_final_var_info$is_continuous)) + 
                     as.logical(as.numeric(X_info$X_final_var_info$is_binary))
   ipairs <- interaction_pairs(ncol(X_train), boolean_vector)
   
   alpha_samples <- as.vector(t(nbcf_fit$alpha))
   beta_samples <- do.call(rbind, lapply(1:num_chains, function(chain) nbcf_fit$Beta[chain, , ]))
-  beta_int_samples <- do.call(rbind, lapply(1:num_chains, function(chain) nbcf_fit$Beta_int[chain, , ]))
   
   sd_y <- sd(y_train)
   alpha_samples <- alpha_samples * sd_y
   beta_samples <- beta_samples * sd_y
-  beta_int_samples <- beta_int_samples * sd_y
+  
+  # Ensure beta_samples is oriented as p x num_mcmc for multiplication
+  if (nrow(beta_samples) > ncol(beta_samples)) {
+    beta_samples <- t(beta_samples)
+  }
   
   tau_posterior <- matrix(rep(alpha_samples, each = scenario_n),
                           nrow = scenario_n, byrow = FALSE)
-  tau_posterior <- tau_posterior + X_train %*% t(beta_samples)
   
-  if (ncol(ipairs) > 0) {
+  # Align design matrix if stochtree added an intercept or propensity score to Beta
+  X_target <- X_train
+  p_beta <- nrow(beta_samples)
+  p_train <- ncol(X_train)
+  p_final <- ncol(X_info$X_final)
+  
+  if (p_beta == p_final) {
+    X_target <- X_info$X_final
+  } else if (p_beta == p_train + 1) {
+    if (general_params_default$propensity_seperate == "none" && general_params_default$propensity_covariate != "none") {
+      X_target <- cbind(X_train, propensity_train)
+    } else {
+      X_target <- cbind(1, X_train)
+    }
+  } else if (p_beta == p_train + 2) {
+    X_target <- cbind(1, X_train, propensity_train)
+  } else if (p_beta == p_final + 1) {
+    X_target <- cbind(1, X_info$X_final)
+  } else if (p_beta == p_final + 2) {
+    X_target <- cbind(1, X_info$X_final, propensity_train)
+  } else if (p_beta != p_train) {
+    stop(paste("Cannot align X_train (ncol =", p_train, ") with beta_samples (nrow =", p_beta, ")"))
+  }
+  
+  tau_posterior <- tau_posterior + X_target %*% beta_samples
+  
+  if (ncol(ipairs) > 0 && !is.null(nbcf_fit$Beta_int)) {
+    beta_int_samples <- do.call(rbind, lapply(1:num_chains, function(chain) nbcf_fit$Beta_int[chain, , ]))
+    beta_int_samples <- beta_int_samples * sd_y
+    if (nrow(beta_int_samples) > ncol(beta_int_samples)) {
+      beta_int_samples <- t(beta_int_samples)
+    }
     for (idx in 1:ncol(ipairs)) {
       j <- ipairs[1, idx]
       k <- ipairs[2, idx]
       interaction_term_values <- X_train[, j] * X_train[, k]
-      tau_posterior <- tau_posterior + interaction_term_values %*% t(beta_int_samples[, idx, drop = FALSE])
+      # Multiply robustly: interaction_term_values is n x 1, beta_int_samples is 1 x draws
+      beta_int_idx <- if(is.matrix(beta_int_samples)) beta_int_samples[idx, , drop = FALSE] else matrix(beta_int_samples[idx], nrow=1)
+      tau_posterior <- tau_posterior + matrix(interaction_term_values, ncol=1) %*% beta_int_idx
     }
   }
   
@@ -291,26 +326,48 @@ cat("Extracting posterior CATEs...\n")
 alpha_actg <- as.vector(t(fit_actg$alpha))
 beta_actg <- do.call(rbind, lapply(1:num_chains, function(chain) fit_actg$Beta[chain, , ]))
 
-# Note: In ACTG_complete.R, interactions might be enabled. 
-# We'll stick to main effects for simplicity in this applied demonstration, 
-# or use the prediction function if we source ACTG_complete.R. Let's do the manual extraction:
 sd_y_actg <- sd(Y_actg)
 alpha_actg <- alpha_actg * sd_y_actg
 beta_actg <- beta_actg * sd_y_actg
 
-tau_post_actg <- matrix(rep(alpha_actg, each = n_actg), nrow = n_actg, byrow = FALSE)
-tau_post_actg <- tau_post_actg + X_train_actg %*% t(beta_actg)
+  if (nrow(beta_actg) > ncol(beta_actg)) {
+    beta_actg <- t(beta_actg)
+  }
+  
+  tau_post_actg <- matrix(rep(alpha_actg, each = n_actg), nrow = n_actg, byrow = FALSE)
+  
+  X_target_actg <- X_train_actg
+  p_beta_actg <- nrow(beta_actg)
+  p_train_actg <- ncol(X_train_actg)
+  
+  if (p_beta_actg == p_train_actg + 1) {
+    if (general_params_default$propensity_seperate == "none" && general_params_default$propensity_covariate != "none") {
+      X_target_actg <- cbind(X_train_actg, propensity_actg)
+    } else {
+      X_target_actg <- cbind(1, X_train_actg)
+    }
+  } else if (p_beta_actg == p_train_actg + 2) {
+    X_target_actg <- cbind(1, X_train_actg, propensity_actg)
+  } else if (p_beta_actg != p_train_actg) {
+    stop(paste("Cannot align X_train_actg (ncol =", p_train_actg, ") with beta_actg (nrow =", p_beta_actg, ")"))
+  }
+  
+  tau_post_actg <- tau_post_actg + X_target_actg %*% beta_actg
 
 # Interaction effects
 if (!is.null(fit_actg$interaction_pairs) && ncol(fit_actg$interaction_pairs) > 0) {
   beta_int_actg <- do.call(rbind, lapply(1:num_chains, function(chain) fit_actg$Beta_int[chain, , ]))
   beta_int_actg <- beta_int_actg * sd_y_actg
+  if (nrow(beta_int_actg) > ncol(beta_int_actg)) {
+    beta_int_actg <- t(beta_int_actg)
+  }
   ipairs_actg <- fit_actg$interaction_pairs
   for (idx in 1:ncol(ipairs_actg)) {
     j <- ipairs_actg[1, idx]
     k <- ipairs_actg[2, idx]
     int_terms <- X_train_actg[, j] * X_train_actg[, k]
-    tau_post_actg <- tau_post_actg + int_terms %*% t(beta_int_actg[, idx, drop = FALSE])
+    beta_int_actg_idx <- if(is.matrix(beta_int_actg)) beta_int_actg[idx, , drop = FALSE] else matrix(beta_int_actg[idx], nrow=1)
+    tau_post_actg <- tau_post_actg + matrix(int_terms, ncol=1) %*% beta_int_actg_idx
   }
 }
 
