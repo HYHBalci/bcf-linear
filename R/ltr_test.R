@@ -82,10 +82,13 @@ tau_tilde <- R_star_star / Z_sym
 # ------------------------------------------------------------------------------
 cat("4. Fitting Learning-to-Rank Scorecard (Stage 2)...\n")
 # We pass your X_mat and tau_tilde to the updated LTR function
+if (!exists("ltr_method")) {
+  ltr_method <- "PG"
+}
 ltr_fit <- ltr_scorecard(
   tau_tilde = tau_tilde, 
   X = X_mat, 
-  method = "PG",                                  # Pairwise Mean Squared Error
+  method = ltr_method,                                  # Configurable Pairwise Mean Squared Error or PG
   interaction_rule = general_params_default$interaction_rule, # Passed directly from your params
   unlink = general_params_default$unlink,
   mini_batch_size = 90000,                          # Active set to prevent O(N^2)

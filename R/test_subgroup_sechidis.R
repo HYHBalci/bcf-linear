@@ -161,36 +161,29 @@ for (b in 1:B) {
   # The estimated subgroup L_alpha comprises individuals whose lower bound >= tau
   L_alpha_giorgio <- which(lower_bounds_giorgio >= tau)
   
-  # E. Subgroup Selection via GLM Simultaneous Confidence Bands (Sechidis/Wan et al. Method)
-  cat("  Computing simultaneous confidence bands (Sechidis GLM Method)...\n")
-  # Convert posterior CATEs into point estimates (pseudo-observations)
-  Y_star <- rowMeans(tau_posterior)
-  df_train <- as.data.frame(X_train)
-  lm_fit <- lm(Y_star ~ ., data = df_train)
+  # E. Subgroup Selection via Simultaneous Confidence Bands (Sechidis/Wan et al. Method applied to BCF)
+  cat("  Computing simultaneous confidence bands (Sechidis Method on BCF)...\n")
   
-  # Get predictions and standard errors for the fitted model
-  preds <- predict(lm_fit, se.fit = TRUE)
-  mu_hat <- preds$fit
-  se_hat <- preds$se.fit
+  # Calculate posterior mean and standard deviation for each patient
+  mu_hat_bcf <- rowMeans(tau_posterior)
+  se_hat_bcf <- apply(tau_posterior, 1, sd)
   
-  # Simulate critical value c1 over the covariate region (using observed covariates)
-  # We use the mvrnorm to draw from the asymptotic distribution of beta_hat
-  Sigma_hat <- vcov(lm_fit)
-  p_vars <- length(coef(lm_fit))
-  Z_sim <- MASS::mvrnorm(1000, mu = rep(0, p_vars), Sigma = Sigma_hat)
+  # To avoid division by zero
+  safe_se_hat_bcf <- ifelse(se_hat_bcf < 1e-8, 1e-8, se_hat_bcf)
   
-  X_design <- model.matrix(lm_fit)
+  # Calculate standardized deviations for each posterior draw
+  # Z_post is n x num_mcmc
+  Z_post <- (mu_hat_bcf - tau_posterior) / safe_se_hat_bcf
   
-  # Avoid division by zero if standard error is numerically zero
-  safe_se_hat <- ifelse(se_hat < 1e-8, 1e-8, se_hat)
-  sim_values <- X_design %*% t(Z_sim)
-  sim_max <- apply(sim_values, 2, function(col) max(col / safe_se_hat))
+  # Find the maximum standardized deviation for each draw across all patients
+  M_b <- apply(Z_post, 2, max)
   
+  # The critical value c1 is the 1 - alpha quantile of these maximums
   alpha <- 0.05
-  c1_hat <- quantile(sim_max, probs = 1 - alpha)
+  c1_bcf <- quantile(M_b, probs = 1 - alpha)
   
-  # Calculate lower bounds for Sechidis method
-  lower_bounds_sechidis <- mu_hat - c1_hat * se_hat
+  # Calculate lower bounds for Sechidis method using the BCF model's uncertainty
+  lower_bounds_sechidis <- mu_hat_bcf - c1_bcf * safe_se_hat_bcf
   L_alpha_sechidis <- which(lower_bounds_sechidis >= tau)
   
   cat(sprintf("  Estimated subgroup sizes - Giorgio: %d, Sechidis: %d (out of %d)\n", 
@@ -203,7 +196,7 @@ for (b in 1:B) {
   fsr_giorgio <- if (length(L_alpha_giorgio) > 0) mean(!(L_alpha_giorgio %in% S_tau)) else 0
   power_giorgio <- sum(L_alpha_giorgio %in% S_tau) / length(S_tau)
   
-  # Sechidis GLM Method Metrics
+  # Sechidis Method Metrics
   type_I_error_sechidis <- any(!(L_alpha_sechidis %in% S_tau))
   fsr_sechidis <- if (length(L_alpha_sechidis) > 0) mean(!(L_alpha_sechidis %in% S_tau)) else 0
   power_sechidis <- sum(L_alpha_sechidis %in% S_tau) / length(S_tau)
@@ -327,26 +320,17 @@ confmarg_actg <- findconfglob(tau_post_actg, tol = 0.05)
 int_actg <- intfrompost1(tau_post_actg, conf = confmarg_actg)[[1]]
 lb_actg_giorgio <- int_actg[, 1]
 
-cat("Computing simultaneous confidence bands (Sechidis GLM Method)...\n")
-Y_star_actg <- rowMeans(tau_post_actg)
-df_train_actg <- as.data.frame(X_train_actg)
-lm_fit_actg <- lm(Y_star_actg ~ ., data = df_train_actg)
-
-preds_actg <- predict(lm_fit_actg, se.fit = TRUE)
-mu_hat_actg <- preds_actg$fit
-se_hat_actg <- preds_actg$se.fit
-
-Sigma_hat_actg <- vcov(lm_fit_actg)
-p_vars_actg <- length(coef(lm_fit_actg))
-Z_sim_actg <- MASS::mvrnorm(1000, mu = rep(0, p_vars_actg), Sigma = Sigma_hat_actg)
-
-X_design_actg <- model.matrix(lm_fit_actg)
+cat("Computing simultaneous confidence bands (Sechidis Method on BCF)...\n")
+mu_hat_actg <- rowMeans(tau_post_actg)
+se_hat_actg <- apply(tau_post_actg, 1, sd)
 safe_se_hat_actg <- ifelse(se_hat_actg < 1e-8, 1e-8, se_hat_actg)
-sim_values_actg <- X_design_actg %*% t(Z_sim_actg)
-sim_max_actg <- apply(sim_values_actg, 2, function(col) max(col / safe_se_hat_actg))
 
-c1_hat_actg <- quantile(sim_max_actg, probs = 1 - 0.05)
-lb_actg_sechidis <- mu_hat_actg - c1_hat_actg * se_hat_actg
+Z_post_actg <- (mu_hat_actg - tau_post_actg) / safe_se_hat_actg
+M_b_actg <- apply(Z_post_actg, 2, max)
+
+alpha_actg <- 0.05
+c1_actg <- quantile(M_b_actg, probs = 1 - alpha_actg)
+lb_actg_sechidis <- mu_hat_actg - c1_actg * safe_se_hat_actg
 
 # We test multiple clinically relevant thresholds
 tau_values_to_test <- c(0, 10, 20, 30)

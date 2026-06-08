@@ -657,7 +657,10 @@ print(p_het_bcf)
 # ==============================================================================
 # 13. SAVE PLOTS TO LOCAL DIRECTORY
 # ==============================================================================
-plot_dir <- "C:/Users/P094412/OneDrive - Amsterdam UMC/Documenten/PhD project/plots/ACTG"
+plot_dir_default <- "C:/Users/P094412/OneDrive - Amsterdam UMC/Documenten/PhD project/plots/ACTG"
+if (!exists("plot_dir")) {
+  plot_dir <- plot_dir_default
+}
 if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
 
 plot_w <- 8; plot_h <- 6; plot_dpi <- 300
