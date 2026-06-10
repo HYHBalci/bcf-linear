@@ -13,7 +13,7 @@ library(gam)
 library(xgboost)
 library(ranger)
 library(coda)
-source('R/shapley_aux.R')
+source('R/shapley_aux.R', local = TRUE)
 
 # ==============================================================================
 # 2. HELPER FUNCTIONS: PREPROCESSING & PATCHED PREDICTIONS

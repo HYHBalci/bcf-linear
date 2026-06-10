@@ -48,232 +48,226 @@ general_params_default <- list(
   regularize_ATE = FALSE, sigma_residual = 0, hn_scale = 0, use_ncp = FALSE, n_tijn = 1
 )
 
-# Simulation parameters
-B <- 5 # Number of simulation iterations
-scenario_n <- 500
+# Simulation parameters (Expanded Grid for Rigorous Testing)
+B <- 30 # Number of simulation draws/iterations per scenario
 tau_target_percentile <- 0.50 # Select tau such that roughly 50% of people have true CATE >= tau
 
-# Store results
-results_df <- data.frame(
-  Iteration = integer(),
-  Tau_Threshold = numeric(),
-  True_Subgroup_Size = integer(),
-  
-  Giorgio_Est_Size = integer(),
-  Giorgio_Type_I_Error = logical(),
-  Giorgio_FSR = numeric(),
-  Giorgio_Power = numeric(),
-  
-  Sechidis_Est_Size = integer(),
-  Sechidis_Type_I_Error = logical(),
-  Sechidis_FSR = numeric(),
-  Sechidis_Power = numeric()
+scenario_grid <- expand.grid(
+  sample_size = c(250, 500, 1000),
+  sigma_sq = c(1.0, 3.0, 5.0),
+  is_te_hetero = c(TRUE, FALSE),
+  is_mu_nonlinear = c(FALSE, TRUE),
+  stringsAsFactors = FALSE
 )
+
+# Master dataframe for all results
+master_results_df <- data.frame()
 
 # 3. SIMULATION LOOP
 # --------------------------------------------------------------------------
-cat("Starting simulation loop...\n")
+cat("Starting simulation loop over", nrow(scenario_grid), "scenarios...\n")
 
-for (b in 1:B) {
-  cat(sprintf("\n--- Iteration %d / %d ---\n", b, B))
+for (s in 1:nrow(scenario_grid)) {
+  scenario_n <- scenario_grid$sample_size[s]
+  s_sigma_sq <- scenario_grid$sigma_sq[s]
+  s_te_hetero <- scenario_grid$is_te_hetero[s]
+  s_mu_nonlin <- scenario_grid$is_mu_nonlinear[s]
   
-  # A. Generate Data
-  # We use generate_data_2 with the same settings as one_simul.R
-  # using different seeds for each iteration
-  data <- generate_data_2(scenario_n, is_te_hetero = TRUE, is_mu_nonlinear = TRUE, 
-                          seed = 12 + b, RCT = FALSE, z_diff = 0.5, BCF = FALSE, sigma_sq = 1)
+  cat(sprintf("\n======================================================\n"))
+  cat(sprintf("SCENARIO %d / %d: n = %d, sigma_sq = %.1f, TE_Hetero = %s, Mu_Nonlin = %s\n", 
+              s, nrow(scenario_grid), scenario_n, s_sigma_sq, s_te_hetero, s_mu_nonlin))
+  cat(sprintf("======================================================\n"))
   
-  true_cate <- data$tau
-  # Dynamically pick tau so approx 50% of the population forms the true subgroup S_tau
-  tau <- quantile(true_cate, probs = tau_target_percentile)
-  S_tau <- which(true_cate >= tau)
-  
-  # Ensure the target subgroup is non-empty
-  if (length(S_tau) == 0) {
-    cat("  Warning: True subgroup S_tau is empty. Skipping.\n")
-    next
-  }
-  
-  cat(sprintf("  True subgroup size: %d / %d (%.1f%%) for threshold tau = %.3f\n", 
-              length(S_tau), scenario_n, length(S_tau)/scenario_n * 100, tau))
-  
-  # B. Fit BCF Model
-  X_train <- as.matrix(sapply(data[, c(1:6)], as.numeric))
-  y_train <- as.numeric(data$y)
-  Z_train <- as.numeric(data$z)
-  propensity_train <- as.numeric(data$pi_x)
-  
-  nbcf_fit <- bcf_linear_probit(
-    X_train = X_train,
-    y_train = y_train,
-    Z_train = Z_train,
-    propensity_train = propensity_train,
-    num_gfr = 31, 
-    num_burnin = 1000, 
-    num_mcmc = 2000, 
-    general_params = general_params_default
-  )
-  
-  # C. Reconstruct Posterior CATE Distribution
-  # The exact method used in one_simul.R
-  X_info <- standardize_X_by_index(X_initial = X_train, process_data = general_params_default$standardize_cov, 
-                                   interaction_rule = general_params_default$interaction_rule, cat_coding_method = "difference")
-
-  alpha_samples <- as.vector(t(nbcf_fit$alpha))
-  beta_samples <- do.call(rbind, lapply(1:num_chains, function(chain) nbcf_fit$Beta[chain, , ]))
-  
-  sd_y <- sd(y_train)
-  alpha_samples <- alpha_samples * sd_y
-  beta_samples <- beta_samples * sd_y
-  
-  # Ensure beta_samples is oriented as p x num_mcmc for multiplication
-  if (nrow(beta_samples) > ncol(beta_samples)) {
-    beta_samples <- t(beta_samples)
-  }
-  
-  tau_posterior <- matrix(rep(alpha_samples, each = scenario_n),
-                          nrow = scenario_n, byrow = FALSE)
-  
-  # Align design matrix if stochtree added an intercept or propensity score to Beta
-  X_target <- X_train
-  p_beta <- nrow(beta_samples)
-  p_train <- ncol(X_train)
-  p_final <- ncol(X_info$X_final)
-  
-  if (p_beta == p_final) {
-    X_target <- X_info$X_final
-  } else if (p_beta == p_train + 1) {
-    if (general_params_default$propensity_seperate == "none" && general_params_default$propensity_covariate != "none") {
-      X_target <- cbind(X_train, propensity_train)
-    } else {
-      X_target <- cbind(1, X_train)
-    }
-  } else if (p_beta == p_train + 2) {
-    X_target <- cbind(1, X_train, propensity_train)
-  } else if (p_beta == p_final + 1) {
-    X_target <- cbind(1, X_info$X_final)
-  } else if (p_beta == p_final + 2) {
-    X_target <- cbind(1, X_info$X_final, propensity_train)
-  } else if (p_beta != p_train) {
-    stop(paste("Cannot align X_train (ncol =", p_train, ") with beta_samples (nrow =", p_beta, ")"))
-  }
-  
-  tau_posterior <- tau_posterior + X_target %*% beta_samples
-  
-  if (!is.null(nbcf_fit$interaction_pairs) && ncol(nbcf_fit$interaction_pairs) > 0) {
-    beta_int_samples <- do.call(rbind, lapply(1:num_chains, function(chain) nbcf_fit$Beta_int[chain, , ]))
-    beta_int_samples <- beta_int_samples * sd_y
-    if (nrow(beta_int_samples) > ncol(beta_int_samples)) {
-      beta_int_samples <- t(beta_int_samples)
+  for (b in 1:B) {
+    cat(sprintf("\n--- Iteration %d / %d ---\n", b, B))
+    
+    # A. Generate Data
+    data <- generate_data_2(scenario_n, is_te_hetero = s_te_hetero, is_mu_nonlinear = s_mu_nonlin, 
+                            seed = s * 1000 + b, RCT = FALSE, z_diff = 0.5, BCF = FALSE, sigma_sq = s_sigma_sq)
+    
+    true_cate <- data$tau
+    tau <- quantile(true_cate, probs = tau_target_percentile)
+    S_tau <- which(true_cate >= tau)
+    
+    if (length(S_tau) == 0) {
+      cat("  Warning: True subgroup S_tau is empty. Skipping.\n")
+      next
     }
     
-    int_pairs <- nbcf_fit$interaction_pairs
-    num_interactions <- ncol(int_pairs)
-    X_int <- matrix(0, nrow = nrow(X_info$X_final), ncol = num_interactions)
-    for (k in 1:num_interactions) {
-      X_int[, k] <- X_info$X_final[, int_pairs[1, k]] * X_info$X_final[, int_pairs[2, k]]
+    cat(sprintf("  True subgroup size: %d / %d (%.1f%%) for threshold tau = %.3f\n", 
+                length(S_tau), scenario_n, length(S_tau)/scenario_n * 100, tau))
+    
+    # B. Fit BCF Model
+    X_train <- as.matrix(sapply(data[, c(1:6)], as.numeric))
+    y_train <- as.numeric(data$y)
+    Z_train <- as.numeric(data$z)
+    propensity_train <- as.numeric(data$pi_x)
+    
+    nbcf_fit <- bcf_linear_probit(
+      X_train = X_train,
+      y_train = y_train,
+      Z_train = Z_train,
+      propensity_train = propensity_train,
+      num_gfr = 31, 
+      num_burnin = 2000, 
+      num_mcmc = 5000, 
+      general_params = general_params_default
+    )
+    
+    # C. Reconstruct Posterior CATE Distribution
+    X_info <- standardize_X_by_index(X_initial = X_train, process_data = general_params_default$standardize_cov, 
+                                     interaction_rule = general_params_default$interaction_rule, cat_coding_method = "difference")
+  
+    alpha_samples <- as.vector(t(nbcf_fit$alpha))
+    beta_samples <- do.call(rbind, lapply(1:num_chains, function(chain) nbcf_fit$Beta[chain, , ]))
+    
+    sd_y <- sd(y_train)
+    alpha_samples <- alpha_samples * sd_y
+    beta_samples <- beta_samples * sd_y
+    
+    if (nrow(beta_samples) > ncol(beta_samples)) {
+      beta_samples <- t(beta_samples)
     }
-    tau_posterior <- tau_posterior + (X_int %*% beta_int_samples)
+    
+    tau_posterior <- matrix(rep(alpha_samples, each = scenario_n),
+                            nrow = scenario_n, byrow = FALSE)
+    
+    X_target <- X_train
+    p_beta <- nrow(beta_samples)
+    p_train <- ncol(X_train)
+    p_final <- ncol(X_info$X_final)
+    
+    if (p_beta == p_final) {
+      X_target <- X_info$X_final
+    } else if (p_beta == p_train + 1) {
+      if (general_params_default$propensity_seperate == "none" && general_params_default$propensity_covariate != "none") {
+        X_target <- cbind(X_train, propensity_train)
+      } else {
+        X_target <- cbind(1, X_train)
+      }
+    } else if (p_beta == p_train + 2) {
+      X_target <- cbind(1, X_train, propensity_train)
+    } else if (p_beta == p_final + 1) {
+      X_target <- cbind(1, X_info$X_final)
+    } else if (p_beta == p_final + 2) {
+      X_target <- cbind(1, X_info$X_final, propensity_train)
+    } else if (p_beta != p_train) {
+      stop(paste("Cannot align X_train (ncol =", p_train, ") with beta_samples (nrow =", p_beta, ")"))
+    }
+    
+    tau_posterior <- tau_posterior + X_target %*% beta_samples
+    
+    if (!is.null(nbcf_fit$interaction_pairs) && ncol(nbcf_fit$interaction_pairs) > 0) {
+      beta_int_samples <- do.call(rbind, lapply(1:num_chains, function(chain) nbcf_fit$Beta_int[chain, , ]))
+      beta_int_samples <- beta_int_samples * sd_y
+      if (nrow(beta_int_samples) > ncol(beta_int_samples)) {
+        beta_int_samples <- t(beta_int_samples)
+      }
+      
+      int_pairs <- nbcf_fit$interaction_pairs
+      num_interactions <- ncol(int_pairs)
+      X_int <- matrix(0, nrow = nrow(X_info$X_final), ncol = num_interactions)
+      for (k in 1:num_interactions) {
+        X_int[, k] <- X_info$X_final[, int_pairs[1, k]] * X_info$X_final[, int_pairs[2, k]]
+      }
+      tau_posterior <- tau_posterior + (X_int %*% beta_int_samples)
+    }
+    
+    # D. Subgroup Selection via Tolerance Intervals (Giorgio's Method)
+    cat("  Computing simultaneous tolerance intervals (Giorgio's Method)...\n")
+    confmarg <- findconfglob(tau_posterior, tol = 0.05)
+    cat(sprintf("    Found marginal confidence level: %.4f\n", confmarg))
+    
+    intervals <- intfrompost1(tau_posterior, conf = confmarg)[[1]]
+    lower_bounds_giorgio <- intervals[, 1]
+    L_alpha_giorgio <- which(lower_bounds_giorgio >= tau)
+    
+    # E. Subgroup Selection via Simultaneous Confidence Bands (Sechidis Method on BCF)
+    cat("  Computing simultaneous confidence bands (Sechidis Method on BCF)...\n")
+    mu_hat_bcf <- rowMeans(tau_posterior)
+    se_hat_bcf <- apply(tau_posterior, 1, sd)
+    safe_se_hat_bcf <- ifelse(se_hat_bcf < 1e-8, 1e-8, se_hat_bcf)
+    
+    Z_post <- (mu_hat_bcf - tau_posterior) / safe_se_hat_bcf
+    M_b <- apply(Z_post, 2, max)
+    
+    alpha <- 0.05
+    c1_bcf <- quantile(M_b, probs = 1 - alpha)
+    
+    lower_bounds_sechidis <- mu_hat_bcf - c1_bcf * safe_se_hat_bcf
+    L_alpha_sechidis <- which(lower_bounds_sechidis >= tau)
+    
+    cat(sprintf("  Estimated subgroup sizes - Giorgio: %d, Sechidis: %d (out of %d)\n", 
+                length(L_alpha_giorgio), length(L_alpha_sechidis), scenario_n))
+    
+    # F. Calculate Performance Metrics
+    type_I_error_giorgio <- as.numeric(any(!(L_alpha_giorgio %in% S_tau)))
+    fsr_giorgio <- if (length(L_alpha_giorgio) > 0) mean(!(L_alpha_giorgio %in% S_tau)) else 0
+    power_giorgio <- sum(L_alpha_giorgio %in% S_tau) / length(S_tau)
+    
+    type_I_error_sechidis <- as.numeric(any(!(L_alpha_sechidis %in% S_tau)))
+    fsr_sechidis <- if (length(L_alpha_sechidis) > 0) mean(!(L_alpha_sechidis %in% S_tau)) else 0
+    power_sechidis <- sum(L_alpha_sechidis %in% S_tau) / length(S_tau)
+    
+    cat(sprintf("    Giorgio Method  -> Type I Error: %s | FSR: %.3f | Power: %.3f\n", as.logical(type_I_error_giorgio), fsr_giorgio, power_giorgio))
+    cat(sprintf("    Sechidis Method -> Type I Error: %s | FSR: %.3f | Power: %.3f\n", as.logical(type_I_error_sechidis), fsr_sechidis, power_sechidis))
+    
+    # Store metrics
+    master_results_df <- rbind(master_results_df, data.frame(
+      Scenario_ID = s,
+      Sample_Size = scenario_n,
+      Sigma_Sq = s_sigma_sq,
+      TE_Hetero = s_te_hetero,
+      Mu_Nonlin = s_mu_nonlin,
+      Iteration = b,
+      Tau_Threshold = tau,
+      True_Subgroup_Size = length(S_tau),
+      
+      Giorgio_Est_Size = length(L_alpha_giorgio),
+      Giorgio_Type_I_Error = type_I_error_giorgio,
+      Giorgio_FSR = fsr_giorgio,
+      Giorgio_Power = power_giorgio,
+      
+      Sechidis_Est_Size = length(L_alpha_sechidis),
+      Sechidis_Type_I_Error = type_I_error_sechidis,
+      Sechidis_FSR = fsr_sechidis,
+      Sechidis_Power = power_sechidis
+    ))
   }
-  
-  # tau_posterior is now (scenario_n x num_mcmc)
-  
-  # D. Subgroup Selection via Tolerance Intervals (Giorgio's Method)
-  cat("  Computing simultaneous tolerance intervals (Giorgio's Method)...\n")
-  
-  # findconfglob searches for the marginal confidence level that yields global (simultaneous) 
-  # coverage at a certain tolerance. Setting tol = 0.05 targets 95% global confidence.
-  confmarg <- findconfglob(tau_posterior, tol = 0.05)
-  cat(sprintf("    Found marginal confidence level: %.4f\n", confmarg))
-  
-  # Extract the intervals at this marginal confidence level
-  intervals <- intfrompost1(tau_posterior, conf = confmarg)[[1]]
-  lower_bounds_giorgio <- intervals[, 1]
-  
-  # The estimated subgroup L_alpha comprises individuals whose lower bound >= tau
-  L_alpha_giorgio <- which(lower_bounds_giorgio >= tau)
-  
-  # E. Subgroup Selection via Simultaneous Confidence Bands (Sechidis/Wan et al. Method applied to BCF)
-  cat("  Computing simultaneous confidence bands (Sechidis Method on BCF)...\n")
-  
-  # Calculate posterior mean and standard deviation for each patient
-  mu_hat_bcf <- rowMeans(tau_posterior)
-  se_hat_bcf <- apply(tau_posterior, 1, sd)
-  
-  # To avoid division by zero
-  safe_se_hat_bcf <- ifelse(se_hat_bcf < 1e-8, 1e-8, se_hat_bcf)
-  
-  # Calculate standardized deviations for each posterior draw
-  # Z_post is n x num_mcmc
-  Z_post <- (mu_hat_bcf - tau_posterior) / safe_se_hat_bcf
-  
-  # Find the maximum standardized deviation for each draw across all patients
-  M_b <- apply(Z_post, 2, max)
-  
-  # The critical value c1 is the 1 - alpha quantile of these maximums
-  alpha <- 0.05
-  c1_bcf <- quantile(M_b, probs = 1 - alpha)
-  
-  # Calculate lower bounds for Sechidis method using the BCF model's uncertainty
-  lower_bounds_sechidis <- mu_hat_bcf - c1_bcf * safe_se_hat_bcf
-  L_alpha_sechidis <- which(lower_bounds_sechidis >= tau)
-  
-  cat(sprintf("  Estimated subgroup sizes - Giorgio: %d, Sechidis: %d (out of %d)\n", 
-              length(L_alpha_giorgio), length(L_alpha_sechidis), scenario_n))
-  
-  # F. Calculate Performance Metrics
-  
-  # Giorgio's Method Metrics
-  type_I_error_giorgio <- any(!(L_alpha_giorgio %in% S_tau))
-  fsr_giorgio <- if (length(L_alpha_giorgio) > 0) mean(!(L_alpha_giorgio %in% S_tau)) else 0
-  power_giorgio <- sum(L_alpha_giorgio %in% S_tau) / length(S_tau)
-  
-  # Sechidis Method Metrics
-  type_I_error_sechidis <- any(!(L_alpha_sechidis %in% S_tau))
-  fsr_sechidis <- if (length(L_alpha_sechidis) > 0) mean(!(L_alpha_sechidis %in% S_tau)) else 0
-  power_sechidis <- sum(L_alpha_sechidis %in% S_tau) / length(S_tau)
-  
-  cat(sprintf("    Giorgio Method  -> Type I Error: %s | FSR: %.3f | Power: %.3f\n", type_I_error_giorgio, fsr_giorgio, power_giorgio))
-  cat(sprintf("    Sechidis Method -> Type I Error: %s | FSR: %.3f | Power: %.3f\n", type_I_error_sechidis, fsr_sechidis, power_sechidis))
-  
-  # Store metrics
-  results_df <- rbind(results_df, data.frame(
-    Iteration = b,
-    Tau_Threshold = tau,
-    True_Subgroup_Size = length(S_tau),
-    
-    Giorgio_Est_Size = length(L_alpha_giorgio),
-    Giorgio_Type_I_Error = type_I_error_giorgio,
-    Giorgio_FSR = fsr_giorgio,
-    Giorgio_Power = power_giorgio,
-    
-    Sechidis_Est_Size = length(L_alpha_sechidis),
-    Sechidis_Type_I_Error = type_I_error_sechidis,
-    Sechidis_FSR = fsr_sechidis,
-    Sechidis_Power = power_sechidis
-  ))
 }
 
-# 4. SUMMARY OF SIMULATION
+# 4. SUMMARY OF SIMULATION AND EXPORT
 # --------------------------------------------------------------------------
 cat("\n======================================================\n")
-cat("SIMULATION SUMMARY OVER", B, "ITERATIONS\n")
+cat("SIMULATION SUMMARY COMPLETED\n")
 cat("======================================================\n")
-summary_stats <- data.frame(
-  Metric = c("Mean Type I Error Rate", "Mean False Selection Rate (FSR)", "Mean Power"),
-  Giorgio_Method = c(
-    mean(results_df$Giorgio_Type_I_Error),
-    mean(results_df$Giorgio_FSR),
-    mean(results_df$Giorgio_Power)
-  ),
-  Sechidis_Method = c(
-    mean(results_df$Sechidis_Type_I_Error),
-    mean(results_df$Sechidis_FSR),
-    mean(results_df$Sechidis_Power)
+
+# Aggregate results
+summary_stats <- master_results_df %>%
+  group_by(Scenario_ID, Sample_Size, Sigma_Sq, TE_Hetero, Mu_Nonlin) %>%
+  summarize(
+    Iter_Count = n(),
+    Giorgio_Mean_TypeI = mean(Giorgio_Type_I_Error),
+    Giorgio_Mean_FSR = mean(Giorgio_FSR),
+    Giorgio_Mean_Power = mean(Giorgio_Power),
+    Sechidis_Mean_TypeI = mean(Sechidis_Type_I_Error),
+    Sechidis_Mean_FSR = mean(Sechidis_FSR),
+    Sechidis_Mean_Power = mean(Sechidis_Power),
+    .groups = "drop"
   )
-)
+
 print(summary_stats)
-print(results_df)
+
+# Save to local directory
+output_dir <- "run_outputs"
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+output_file <- file.path(output_dir, "sechidis_simulation_results.csv")
+write.csv(master_results_df, output_file, row.names = FALSE)
+write.csv(summary_stats, file.path(output_dir, "sechidis_simulation_summary.csv"), row.names = FALSE)
+
+cat(sprintf("\nResults successfully saved to %s\n", output_dir))
 
 # ==============================================================================
 # 5. BONUS: APPLIED SETTING ON ACTG175
@@ -311,7 +305,7 @@ n_actg <- nrow(X_train_actg)
 cat("Fitting BCF model on ACTG175...\n")
 fit_actg <- bcf_linear_probit(
   X_train = X_train_actg, y_train = Y_actg, Z_train = Z_actg - 0.5,
-  num_gfr = 50, num_burnin = 1000, num_mcmc = 3000,
+  num_gfr = 50, num_burnin = 2000, num_mcmc = 5000,
   general_params = general_params_default # Borrowing from the above
 )
 
