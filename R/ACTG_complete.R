@@ -541,7 +541,8 @@ explanation_bcf <- explain(
   x_train = as.data.frame(X_train_mat),
   x_explain = as.data.frame(X_train_mat),
   approach = "empirical", 
-  prediction_zero = mean(cate_hat_bcf)
+  phi0 = mean(cate_hat_bcf),
+  predict_model = predict_model.bcf
 )
 
 cat("\n--- BCF SHAPLEY VALUES (MEAN ABSOLUTE) ---\n")
