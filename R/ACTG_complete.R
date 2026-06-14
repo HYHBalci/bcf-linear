@@ -529,9 +529,9 @@ predict_model.bcf <- function(x, newdata) {
   # newdata is expected to be a data.frame matching X_train_mat
   # Since BCF CATE (tau_hat) shouldn't strictly depend on Z for its own internal structure,
   # but predict.bcfmodel requires Z, we provide a dummy Z.
-  newdata_df <- as.data.frame(newdata)
-  dummy_z <- rep(1, nrow(newdata_df))
-  res <- predict.bcfmodel(x, X = newdata_df, Z = dummy_z)
+  newdata_mat <- as.matrix(newdata)
+  dummy_z <- rep(1, nrow(newdata_mat))
+  res <- predict.bcfmodel(x, X = newdata_mat, Z = dummy_z)
   rowMeans(res$tau_hat)
 }
 
