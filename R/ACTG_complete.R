@@ -536,13 +536,18 @@ predict_model.bcf <- function(x, newdata) {
 }
 
 # Compute empirical Shapley values, using the mean CATE as baseline
+# Subsample x_explain to 100 rows to prevent PC from jamming (computationally heavy!)
+set.seed(42)
+explain_subset_idx <- sample(1:nrow(X_train_mat), min(100, nrow(X_train_mat)))
+
 explanation_bcf <- explain(
   model = fit_bcf,
   x_train = as.data.frame(X_train_mat),
-  x_explain = as.data.frame(X_train_mat),
+  x_explain = as.data.frame(X_train_mat)[explain_subset_idx, ],
   approach = "empirical", 
   phi0 = mean(cate_hat_bcf),
-  predict_model = predict_model.bcf
+  predict_model = predict_model.bcf,
+  max_n_coalitions = 2000
 )
 
 cat("\n--- BCF SHAPLEY VALUES (MEAN ABSOLUTE) ---\n")
