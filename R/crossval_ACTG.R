@@ -120,7 +120,7 @@ predict_linear_bcf_patched <- function(object, X, Z, propensity = NULL, rfx_grou
   
   train_set_metadata <- object$train_set_metadata
   X_processed <- preprocessPredictionData(X, train_set_metadata)
-  X_linear <- X 
+  X_linear <- X_processed 
   
   if (!is.null(Z) && is.null(dim(Z))) Z <- as.matrix(as.numeric(Z))
   if (!is.null(propensity) && is.null(dim(propensity))) propensity <- as.matrix(propensity)
@@ -155,7 +155,17 @@ predict_linear_bcf_patched <- function(object, X, Z, propensity = NULL, rfx_grou
   has_interactions <- !is.null(object$Beta_int) && (dim(object$Beta_int)[3] > 0)
   if (has_interactions) beta_int_samples <- matrix(aperm(object$Beta_int, c(2, 1, 3)), nrow = total_samples)
   
-  linear_pred <- matrix(rep(alpha_samples, each=nrow(X)), nrow=nrow(X)) + as.matrix(X_linear) %*% t(beta_samples)
+  p_beta <- ncol(beta_samples)
+  p_linear <- ncol(X_linear)
+  X_target <- X_linear
+  
+  if (p_beta == p_linear + 1) {
+    X_target <- cbind(1, X_linear)
+  } else if (p_beta != p_linear) {
+    stop(paste("Cannot align X_linear (ncol =", p_linear, ") with beta_samples (ncol =", p_beta, ")"))
+  }
+  
+  linear_pred <- matrix(rep(alpha_samples, each=nrow(X)), nrow=nrow(X)) + as.matrix(X_target) %*% t(beta_samples)
   
   if (has_interactions) {
     int_pairs <- object$interaction_pairs
@@ -665,16 +675,16 @@ build_heterogeneity_plot <- function(het_draws, model_name) {
 }
 
 # A. Semi-Parametric BART (Heterogeneity = CATE_test - alpha_train)
-het_draws_nbcf_test <- matrix(0, nrow = nrow(oos_tau_draws_nbcf[[1]]$het_draws), ncol = n_total)
+het_draws_nbcf_test <- matrix(0, nrow = n_total, ncol = ncol(oos_tau_draws_nbcf[[1]]$het_draws))
 for (k in 1:K_folds) {
-  het_draws_nbcf_test[, oos_tau_draws_nbcf[[k]]$idx] <- oos_tau_draws_nbcf[[k]]$het_draws
+  het_draws_nbcf_test[oos_tau_draws_nbcf[[k]]$idx, ] <- oos_tau_draws_nbcf[[k]]$het_draws
 }
 p_het_nbcf <- build_heterogeneity_plot(het_draws_nbcf_test, "Semi-Parametric BART (CATE - \u03b1)")
 
 # B. Standard BCF (Heterogeneity = CATE_test - ATE_test)
-het_draws_bcf_test <- matrix(0, nrow = nrow(oos_tau_draws_bcf[[1]]$het_draws), ncol = n_total)
+het_draws_bcf_test <- matrix(0, nrow = n_total, ncol = ncol(oos_tau_draws_bcf[[1]]$het_draws))
 for (k in 1:K_folds) {
-  het_draws_bcf_test[, oos_tau_draws_bcf[[k]]$idx] <- oos_tau_draws_bcf[[k]]$het_draws
+  het_draws_bcf_test[oos_tau_draws_bcf[[k]]$idx, ] <- oos_tau_draws_bcf[[k]]$het_draws
 }
 p_het_bcf <- build_heterogeneity_plot(het_draws_bcf_test, "Standard BCF (CATE - ATE)")
 

@@ -535,12 +535,11 @@ predict_model.bcf <- function(x, newdata) {
   rowMeans(res$tau_hat)
 }
 
-# Create explainer for BCF
-explainer_bcf <- shapr(as.data.frame(X_train_mat), fit_bcf)
 # Compute empirical Shapley values, using the mean CATE as baseline
 explanation_bcf <- explain(
-  as.data.frame(X_train_mat), 
-  explainer = explainer_bcf, 
+  model = fit_bcf,
+  x_train = as.data.frame(X_train_mat),
+  x_explain = as.data.frame(X_train_mat),
   approach = "empirical", 
   prediction_zero = mean(cate_hat_bcf)
 )
