@@ -694,7 +694,7 @@ print(p_het_bcf)
 # ==============================================================================
 # 13. SAVE PLOTS TO LOCAL DIRECTORY
 # ==============================================================================
-plot_dir <- "C:/Users/P094412/OneDrive - Amsterdam UMC/Documenten/PhD project/plots/ACTG_cross"
+plot_dir <- "plots/ACTG_cross"
 if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
 
 plot_w <- 8; plot_h <- 6; plot_dpi <- 300
