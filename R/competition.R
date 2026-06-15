@@ -317,7 +317,7 @@ for (file_path in csv_files) {
     # Create an inner progress bar for the dataset
     pb_inner <- progress_bar$new(
       format = "    Dataset steps [:bar] :percent ETA: :eta",
-      total = 5, clear = TRUE, width = 60
+      total = 6, clear = TRUE, width = 60
     )
     
     # BCF Models (Probit for binary, Linear for continuous)
@@ -358,6 +358,9 @@ for (file_path in csv_files) {
     pseudo_Y_s <- numeric(nrow(df_dr))
     pseudo_Y_t <- numeric(nrow(df_dr))
     
+    OOF_mu_0_hat_s <- numeric(nrow(df_dr))
+    OOF_mu_0_hat_t <- numeric(nrow(df_dr))
+    
     dr_mu_coefs_s <- matrix(NA, nrow=K_folds, ncol=length(sl_library)); colnames(dr_mu_coefs_s) <- sl_library
     dr_mu_coefs_t1 <- matrix(NA, nrow=K_folds, ncol=length(sl_library)); colnames(dr_mu_coefs_t1) <- sl_library
     dr_mu_coefs_t0 <- matrix(NA, nrow=K_folds, ncol=length(sl_library)); colnames(dr_mu_coefs_t0) <- sl_library
@@ -384,6 +387,9 @@ for (file_path in csv_files) {
       mu_0_hat_s <- predict(sl_mu_s, newdata = X_val_0)$pred
       mu_1_hat_t <- predict(sl_mu_t1, newdata = X_val_no_A)$pred
       mu_0_hat_t <- predict(sl_mu_t0, newdata = X_val_no_A)$pred
+      
+      OOF_mu_0_hat_s[val_idx] <- mu_0_hat_s
+      OOF_mu_0_hat_t[val_idx] <- mu_0_hat_t
       
       A_v <- df_dr$A[val_idx]
       Y_v <- df_dr$Y[val_idx]
@@ -414,7 +420,7 @@ for (file_path in csv_files) {
     
     for (v in 1:p_vars) {
       if (p_vars > 1) {
-        X_restricted <- X_train_mat[, -v, drop=FALSE]
+        X_restricted <- as.data.frame(X_train_mat[, -v, drop=FALSE])
         rf_s <- ranger::ranger(y = pseudo_Y_s, x = X_restricted, num.trees = 100)
         rf_t <- ranger::ranger(y = pseudo_Y_t, x = X_restricted, num.trees = 100)
         
@@ -552,28 +558,62 @@ for (file_path in csv_files) {
         tryCatch({
           rpart.plot(subgroup_tree, type = 4, extra = 1, roundint = FALSE, main = paste("Subgroup Rule:", model_name), box.palette = c("tomato", "white", "#008080"), shadow.col = "gray", nn = TRUE)
         }, error = function(e) {
-          cat("\nFailed to plot tree for", model_name, ":", e$message, "\n")
-        }, finally = {
-          dev.off()
-        })
+        }, finally = { dev.off() })
       }
       
       tree_data$Leaf_Node <- as.factor(subgroup_tree$where)
-      best_node <- (tree_data %>% group_by(Leaf_Node) %>% summarize(m = mean(CATE)) %>% arrange(desc(m)))$Leaf_Node[1]
-      return(ifelse(tree_data$Leaf_Node == best_node, 1, 0))
+      best_row_idx <- as.numeric(as.character((tree_data %>% group_by(Leaf_Node) %>% summarize(m = mean(CATE)) %>% arrange(desc(m)))$Leaf_Node[1]))
+      
+      subgroup_vec <- ifelse(tree_data$Leaf_Node == best_row_idx, 1, 0)
+      
+      rule_text <- "All Patients (No Subgroup Detected)"
+      if (nrow(subgroup_tree$frame) > 1) {
+        best_node_id <- as.numeric(row.names(subgroup_tree$frame)[best_row_idx])
+        path <- path.rpart(subgroup_tree, nodes = best_node_id, print.it = FALSE)
+        rule_conditions <- path[[1]][-1]
+        if (length(rule_conditions) > 0) {
+            rule_text <- paste(rule_conditions, collapse = " AND ")
+        }
+      }
+      
+      return(list(indicator = subgroup_vec, rule = rule_text))
     }
     
-    sub_nbcf <- get_subgroup(cate_hat_nbcf, "BCF (Horseshoe)")
-    sub_standard_bcf <- get_subgroup(cate_hat_standard_bcf, "Standard BCF")
-    sub_dr_s <- get_subgroup(cate_hat_dr_s, "DR-Learner (S-Learner)")
-    sub_dr_t <- get_subgroup(cate_hat_dr_t, "DR-Learner (T-Learner)")
-    sub_old <- get_subgroup(cate_hat_old, "Old Linear Model")
+    sub_nbcf_res <- get_subgroup(cate_hat_nbcf, "BCF (Horseshoe)")
+    sub_nbcf <- sub_nbcf_res$indicator; rule_nbcf <- sub_nbcf_res$rule
+    
+    sub_std_res <- get_subgroup(cate_hat_standard_bcf, "Standard BCF")
+    sub_standard_bcf <- sub_std_res$indicator; rule_standard_bcf <- sub_std_res$rule
+    
+    sub_dr_s_res <- get_subgroup(cate_hat_dr_s, "DR-Learner (S-Learner)")
+    sub_dr_s <- sub_dr_s_res$indicator; rule_dr_s <- sub_dr_s_res$rule
+    
+    sub_dr_t_res <- get_subgroup(cate_hat_dr_t, "DR-Learner (T-Learner)")
+    sub_dr_t <- sub_dr_t_res$indicator; rule_dr_t <- sub_dr_t_res$rule
+    
+    sub_old_res <- get_subgroup(cate_hat_old, "Old Linear Model")
+    sub_old <- sub_old_res$indicator; rule_old <- sub_old_res$rule
     
     # Majority Votes
     vote_bcf <- sub_nbcf + sub_standard_bcf + sub_old
-    vote_dr <- sub_dr_s
-    
+    vote_dr <- sub_dr_s + sub_dr_t
     final_S_bcf <- ifelse(vote_bcf >= 2, 1, 0)
+    
+    # Consensus Rule
+    rule_consensus <- "All Patients (No Subgroup Detected)"
+    if (sum(final_S_bcf) > 0 && sum(final_S_bcf) < length(final_S_bcf)) {
+        cons_tree <- rpart(final_S_bcf ~ ., data = X_comp_raw, method = "anova", control = rpart.control(cp = 0.01, maxdepth = 3))
+        if (nrow(cons_tree$frame) > 1) {
+            leaf_nodes <- which(cons_tree$frame$var == "<leaf>")
+            best_leaf <- leaf_nodes[which.max(cons_tree$frame$yval[leaf_nodes])]
+            best_node_id <- as.numeric(row.names(cons_tree$frame)[best_leaf])
+            path <- path.rpart(cons_tree, nodes = best_node_id, print.it = FALSE)
+            rule_conditions <- path[[1]][-1]
+            if (length(rule_conditions) > 0) {
+                rule_consensus <- paste(rule_conditions, collapse = " AND ")
+            }
+        }
+    }
     final_S_dr <- vote_dr
     final_S <- final_S_bcf # Main export uses BCF ensemble
     
@@ -713,6 +753,34 @@ for (file_path in csv_files) {
     # Extract Consensus Predictive Covariates (TE-VIM + BCF)
     combined_predictive <- unique(c(predictive_vars, names(sort(te_vim_t, decreasing=TRUE)[1:min(3, length(te_vim_t))])))
     
+    # Extract Non-Parametric Prognostic Covariates (P-VIM)
+    mu_hat_nbcf <- rowMeans(predict_linear_bcf_patched(fit_nbcf, X = X_train_mat, Z = as.matrix(Z_comp))$mu_hat)
+    mu_hat_standard_bcf <- rowMeans(fit_standard_bcf$mu_hat_train)
+    
+    X_train_df_pvim <- as.data.frame(X_train_mat)
+    p_vim_nbcf <- ranger::ranger(y = mu_hat_nbcf, x = X_train_df_pvim, num.trees = 100, importance = "permutation")$variable.importance
+    p_vim_standard_bcf <- ranger::ranger(y = mu_hat_standard_bcf, x = X_train_df_pvim, num.trees = 100, importance = "permutation")$variable.importance
+    p_vim_dr_s <- ranger::ranger(y = OOF_mu_0_hat_s, x = X_train_df_pvim, num.trees = 100, importance = "permutation")$variable.importance
+    p_vim_dr_t <- ranger::ranger(y = OOF_mu_0_hat_t, x = X_train_df_pvim, num.trees = 100, importance = "permutation")$variable.importance
+    
+    format_vim <- function(vim, top_n = 10) {
+      v <- sort(vim, decreasing = TRUE)
+      v <- v[1:min(top_n, length(v))]
+      paste0(names(v), " (", sprintf("%.3f", v), ")", collapse = ", ")
+    }
+    
+    top_prog_nbcf <- format_vim(p_vim_nbcf)
+    top_prog_standard_bcf <- format_vim(p_vim_standard_bcf)
+    top_prog_dr_s <- format_vim(p_vim_dr_s)
+    top_prog_dr_t <- format_vim(p_vim_dr_t)
+    
+    # Save Full TE-VIM and P-VIM to CSV
+    te_vim_df <- data.frame(Variable = names(te_vim_s), DR_Learner_S = te_vim_s, DR_Learner_T = te_vim_t)
+    write.csv(te_vim_df[order(-te_vim_df$DR_Learner_S), ], file.path(plot_dir, paste0("TE_VIM_results_", dataset_id, ".csv")), row.names = FALSE)
+    
+    p_vim_df <- data.frame(Variable = names(p_vim_nbcf), BCF_Horseshoe = as.numeric(p_vim_nbcf), Standard_BCF = as.numeric(p_vim_standard_bcf), DR_Learner_S = as.numeric(p_vim_dr_s), DR_Learner_T = as.numeric(p_vim_dr_t))
+    write.csv(p_vim_df[order(-p_vim_df$BCF_Horseshoe), ], file.path(plot_dir, paste0("P_VIM_results_", dataset_id, ".csv")), row.names = FALSE)
+    
     # Export summary text file
     summary_file <- file.path(plot_dir, paste0("results_summary_", dataset_id, ".txt"))
     sink(summary_file)
@@ -725,18 +793,41 @@ for (file_path in csv_files) {
     }
     cat("==================================================================\n\n")
 
-    cat("--- PROGNOSTIC COVARIATES (LINEAR MAIN EFFECTS) ---\n")
+    cat("--- SUBGROUP DECISION RULES ---\n")
+    cat("Consensus Decision Rule (Majority Vote):\n")
+    cat(sprintf("  %s\n\n", rule_consensus))
+    cat("Model-Specific Decision Rules:\n")
+    cat(sprintf("  BCF (Shoe)    : %s\n", rule_nbcf))
+    cat(sprintf("  BCF (Std)     : %s\n", rule_standard_bcf))
+    cat(sprintf("  DR-Learner (S): %s\n", rule_dr_s))
+    cat(sprintf("  DR-Learner (T): %s\n", rule_dr_t))
+    cat(sprintf("  Old Linear    : %s\n", rule_old))
+    cat("\n")
+
+    cat("--- PROGNOSTIC COVARIATES ---\n")
+    cat("1. Parametric Linear Main Effects (Horseshoe 95% CI excludes 0):\n")
     if (length(sig_prognostic) > 0) {
-      cat("Significant Prognostic Variables (95% CI excludes 0):\n")
       print(sig_prognostic)
     } else {
-      cat("No strongly significant prognostic variables detected.\n")
+      cat("  [None detected]\n")
     }
+    cat("\n")
+    
+    cat("2. Non-Parametric Prognostic Effects (Top 10 by Surrogate P-VIM):\n")
+    cat(sprintf("  BCF (Shoe)    : %s\n", top_prog_nbcf))
+    cat(sprintf("  BCF (Std)     : %s\n", top_prog_standard_bcf))
+    cat(sprintf("  DR-Learner (S): %s\n", top_prog_dr_s))
+    cat(sprintf("  DR-Learner (T): %s\n", top_prog_dr_t))
     cat("\n")
 
     cat("--- CONSENSUS PREDICTIVE COVARIATES ---\n")
     cat("Top Predictive Features (BCF Splits + TE-VIM):\n")
     print(combined_predictive)
+    cat("\n")
+    cat("Top 10 TE-VIM Magnitudes (S-Learner):\n")
+    cat(sprintf("  %s\n", format_vim(te_vim_s)))
+    cat("Top 10 TE-VIM Magnitudes (T-Learner):\n")
+    cat(sprintf("  %s\n", format_vim(te_vim_t)))
     cat("\n")
     
     cat("--- WAN & SECHIDIS INTERVALS (DR-LEARNER) ---\n")
