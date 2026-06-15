@@ -237,3 +237,55 @@ plot_tolerance_intervals <- function(post_matrix, feature_values, feature_name) 
     theme_minimal(base_size = 14) +
     theme(legend.position = c(0.15, 0.9), legend.title = element_blank(), legend.background = element_rect(fill = "white", color = "black", linewidth = 0.3), panel.grid.major.x = element_blank(), panel.grid.minor.x = element_blank())
 }
+
+#' Extract Full 5000-Draw Shapley Posterior Dissected into Main and Interaction Effects
+get_shapley_posterior_dissected <- function(feature_name, indices, X, beta_post, beta_int_post, ipairs) {
+  j <- match(feature_name, colnames(X))
+  if (is.na(j)) stop(paste("Feature", feature_name, "not found in X"))
+  
+  cov_X_precomputed <- cov(X)
+  if (nrow(ipairs) != 2 && ncol(ipairs) == 2) ipairs <- t(ipairs)
+  p_int <- ncol(ipairs)
+  
+  is_3D <- length(dim(beta_post)) == 3
+  if (is_3D) {
+    beta_samples <- do.call(rbind, lapply(1:dim(beta_post)[1], function(chain) beta_post[chain, , ]))
+    beta_int_samples <- if (p_int > 0) do.call(rbind, lapply(1:dim(beta_int_post)[1], function(chain) beta_int_post[chain, , ])) else matrix(0, nrow = nrow(beta_samples), ncol = 0)
+  } else {
+    beta_samples <- beta_post
+    beta_int_samples <- if (p_int > 0) beta_int_post else matrix(0, nrow = nrow(beta_samples), ncol = 0)
+  }
+  
+  num_samples <- nrow(beta_samples)
+  
+  # Initialize separate matrices for main and interaction terms
+  main_matrix <- matrix(0, nrow = length(indices), ncol = num_samples)
+  int_matrix <- matrix(0, nrow = length(indices), ncol = num_samples)
+  
+  involved <- which(ipairs[1, ] == j | ipairs[2, ] == j)
+  k_vec <- if(length(involved) > 0) ifelse(ipairs[1, involved] == j, ipairs[2, involved], ipairs[1, involved]) else integer(0)
+  
+  cat("Extracting dissected posterior for feature:", feature_name, "...\n")
+  for (idx_pos in seq_along(indices)) {
+    x_star <- X[indices[idx_pos], ]
+    
+    # 1. Main Effect
+    main_term <- beta_samples[, j] * x_star[j]
+    
+    # 2. Interaction Effect
+    if (length(involved) > 0) {
+      delta_vec <- (x_star[j] * x_star[k_vec]) - cov_X_precomputed[j, k_vec]
+      interaction_sum <- as.numeric(beta_int_samples[, involved, drop = FALSE] %*% delta_vec)
+    } else {
+      interaction_sum <- rep(0, num_samples)
+    }
+    
+    main_matrix[idx_pos, ] <- main_term
+    int_matrix[idx_pos, ] <- 0.5 * interaction_sum
+  }
+  
+  return(list(
+    main = main_matrix, 
+    interaction = int_matrix
+  ))
+}
