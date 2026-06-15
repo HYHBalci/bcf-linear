@@ -23,12 +23,14 @@ if (!require(zip)) install.packages("zip", repos="http://cran.us.r-project.org")
 library(zip)
 
 source('R/shapley_aux.R')
+source('R/old_linear_linear.R')  # Load custom linear model
+source('R/utility_functions.R')
 
 # ==============================================================================
 # 2. HELPER FUNCTIONS: PREPROCESSING & PATCHED PREDICTION
 # ==============================================================================
 
-standardize_X_by_index_new <- function(X_initial, process_data = TRUE, interaction_rule = c("continuous", "continuous_or_binary", "all"), cat_coding_method = c("sum", "difference")) {
+standardize_X_by_index_new <- function(X_initial, process_data = TRUE, interaction_rule = c("continuous", "continuous_or_binary", "all", "none"), cat_coding_method = c("sum", "difference")) {
   interaction_rule <- match.arg(interaction_rule)
   cat_coding_method <- match.arg(cat_coding_method)
   if (!is.data.frame(X_initial) && !is.matrix(X_initial)) stop("X_initial must be a data.frame or a matrix.")
@@ -92,7 +94,7 @@ standardize_X_by_index_new <- function(X_initial, process_data = TRUE, interacti
   }
   
   p_int_calculated <- 0; n_final_cols <- ncol(X_final)
-  if (n_final_cols > 1) {
+  if (n_final_cols > 1 && interaction_rule != "none") {
     is_candidate <- switch(interaction_rule, "all" = rep(TRUE, n_final_cols), "continuous_or_binary" = (X_final_var_info$is_continuous | X_final_var_info$is_binary), "continuous" = X_final_var_info$is_continuous)
     is_candidate[is.na(is_candidate)] <- FALSE
     for (i in 1:(n_final_cols - 1)) { for (j in (i + 1):n_final_cols) { if (is_candidate[i] || is_candidate[j]) p_int_calculated <- p_int_calculated + 1 } }
@@ -287,34 +289,58 @@ for (file_path in csv_files) {
     is_binary <- length(unique(Y_comp[!is.na(Y_comp)])) <= 2
     sl_family <- if (is_binary) binomial() else gaussian()
     
-    results_comp <- standardize_X_by_index_new(X_initial = X_comp_raw, process_data = TRUE, interaction_rule = "continuous_or_binary", cat_coding_method = "sum")
+    current_interaction_rule <- if (ncol(X_comp_raw) > 15) "none" else "continuous_or_binary"
+    
+    results_comp <- standardize_X_by_index_new(X_initial = X_comp_raw, process_data = TRUE, interaction_rule = current_interaction_rule, cat_coding_method = "sum")
     X_train_mat <- results_comp$X_final
     
     general_params_default <- list(
-      cutpoint_grid_size = 100, standardize = TRUE, sample_sigma2_global = TRUE, sigma2_global_init = 1, 
+      cutpoint_grid_size = 100, standardize = TRUE, sample_sigma2_global = !is_binary, sigma2_global_init = 1, 
       sigma2_global_shape = 1, sigma2_global_scale = 0.001, variable_weights = NULL, propensity_covariate = "mu", 
       adaptive_coding = FALSE, control_coding_init = -0.5, treated_coding_init = 0.5, rfx_prior_var = NULL, 
       random_seed = 1, keep_burnin = FALSE, keep_gfr = FALSE, keep_every = 1, num_chains = 1, verbose = FALSE, 
       sample_global_prior = "half-cauchy", unlink = TRUE, propensity_seperate = "none", gibbs = TRUE, step_out = 0.5, 
-      max_steps = 150, save_output = FALSE, probit_outcome_model = is_binary, interaction_rule = "continuous_or_binary", 
+      max_steps = 150, save_output = FALSE, probit_outcome_model = is_binary, interaction_rule = current_interaction_rule, 
       standardize_cov = FALSE, simple_prior = FALSE, save_partial_residual = FALSE, regularize_ATE = FALSE,
       sigma_residual = 0, hn_scale = 0, use_ncp = FALSE, n_tijn = 1
     )
     
-    # BCF Models
+    # Create an inner progress bar for the dataset
+    pb_inner <- progress_bar$new(
+      format = "    Dataset steps [:bar] :percent ETA: :eta",
+      total = 5, clear = TRUE, width = 60
+    )
+    
+    # BCF Models (Probit for binary, Linear for continuous)
+    pb_inner$message(sprintf("[%s] Fitting BCF Horseshoe model...", Sys.time()))
+    pb_inner$tick(0)
     fit_nbcf <- bcf_linear_probit(X_train = X_train_mat, y_train = Y_comp, Z_train = Z_comp, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = general_params_default)
     
-    general_params_no_shrinkage <- general_params_default
-    general_params_no_shrinkage$sample_global_prior <- "none" 
-    fit_nbcf_no_shrink <- bcf_linear_probit(X_train = X_train_mat, y_train = Y_comp, Z_train = Z_comp, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = general_params_no_shrinkage)
+    # Standard BCF
+    pb_inner$message(sprintf("[%s] Fitting Standard BCF model...", Sys.time()))
+    pb_inner$tick(1)
+    general_params_standard_bcf <- general_params_default
+    general_params_standard_bcf$propensity_covariate <- "none"
+    general_params_standard_bcf$adaptive_coding <- TRUE
     
-    general_params_hn <- general_params_default
-    general_params_hn$sample_global_prior <- "half-normal"
-    general_params_hn$hn_scale <- 0.5
-    fit_nbcf_hn <- bcf_linear_probit(X_train = X_train_mat, y_train = Y_comp, Z_train = Z_comp, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = general_params_hn)
+    fit_standard_bcf <- bcf(
+      X_train = as.matrix(X_train_mat),
+      y_train = Y_comp,
+      Z_train = Z_comp,
+      propensity_train = NULL,
+      num_gfr = 50, 
+      num_burnin = 1000, 
+      num_mcmc = 3000,
+      general_params = general_params_standard_bcf
+    )
     
     # DR-Learner
-    sl_library <- c("SL.glm", "SL.glmnet", "SL.gam", "SL.xgboost", "SL.ranger")
+    pb_inner$message(sprintf("[%s] Fitting DR-Learner...", Sys.time()))
+    pb_inner$tick(1)
+    sl_library <- c("SL.glm", "SL.glmnet", "SL.xgboost", "SL.ranger")
+    if (ncol(X_comp_raw) <= 15) {
+      sl_library <- c(sl_library, "SL.gam")
+    }
     pi_hat <- mean(Z_comp) 
     df_dr <- data.frame(Y = Y_comp, A = Z_comp, X_train_mat)
     
@@ -322,11 +348,16 @@ for (file_path in csv_files) {
     fold_ids <- sample(rep(1:K_folds, length.out = nrow(df_dr)))
     pseudo_Y <- numeric(nrow(df_dr))
     
+    dr_mu_coefs <- matrix(NA, nrow=K_folds, ncol=length(sl_library))
+    colnames(dr_mu_coefs) <- sl_library
+    
     for (k in 1:K_folds) {
       train_idx <- which(fold_ids != k); val_idx <- which(fold_ids == k)
       X_train_k <- df_dr[train_idx, setdiff(names(df_dr), "Y")]; Y_train_k <- df_dr$Y[train_idx]
       
       sl_mu <- SuperLearner(Y = Y_train_k, X = X_train_k, SL.library = sl_library, family = sl_family, cvControl = list(V = 10))
+      dr_mu_coefs[k, ] <- sl_mu$coef
+      
       X_val_1 <- df_dr[val_idx, setdiff(names(df_dr), "Y")]; X_val_1$A <- 1
       X_val_0 <- df_dr[val_idx, setdiff(names(df_dr), "Y")]; X_val_0$A <- 0
       
@@ -338,19 +369,63 @@ for (file_path in csv_files) {
     X_train_df <- as.data.frame(X_train_mat)
     fit_dr <- SuperLearner(Y = pseudo_Y, X = X_train_df, SL.library = sl_library, family = gaussian(), cvControl = list(V = 10))
     cate_hat_dr <- as.vector(fit_dr$SL.predict)
+    dr_tau_weights <- fit_dr$coef
+    dr_mu_weights <- colMeans(dr_mu_coefs)
     
     # Inference
     tau_draws_nbcf <- predict_linear_bcf_patched(fit_nbcf, X = X_train_mat, Z = as.matrix(Z_comp))$tau_hat
     cate_hat_nbcf <- rowMeans(tau_draws_nbcf)
-    ate_res_nbcf <- mean(colMeans(tau_draws_nbcf))
+    ate_draws_nbcf <- colMeans(tau_draws_nbcf)
+    ate_res_nbcf <- mean(ate_draws_nbcf)
     
-    tau_draws_nbcf_no_shrink <- predict_linear_bcf_patched(fit_nbcf_no_shrink, X = X_train_mat, Z = as.matrix(Z_comp))$tau_hat
-    cate_hat_nbcf_no_shrink <- rowMeans(tau_draws_nbcf_no_shrink)
+    tau_draws_standard_bcf <- fit_standard_bcf$tau_hat_train
+    cate_hat_standard_bcf <- rowMeans(tau_draws_standard_bcf)
+    ate_draws_standard_bcf <- colMeans(tau_draws_standard_bcf)
+    ate_res_standard_bcf <- mean(ate_draws_standard_bcf)
     
-    tau_draws_nbcf_hn <- predict_linear_bcf_patched(fit_nbcf_hn, X = X_train_mat, Z = as.matrix(Z_comp))$tau_hat
-    cate_hat_nbcf_hn <- rowMeans(tau_draws_nbcf_hn)
+    # Fit custom Old Linear model (Source script assumed loaded)
+    pb_inner$message(sprintf("[%s] Fitting Old Linear Model...", Sys.time()))
+    pb_inner$tick(1)
+    n_iter <- 2000; burn_in <- 1000
+    fit_old <- fit_grouped_horseshoes_R(y_vec = Y_comp, X_mat = X_train_mat, Z_vec = Z_comp, family = ifelse(is_binary, "binomial", "gaussian"), n_iter = n_iter, burn_in = burn_in, num_chains = 1, propensity_as_covariate = FALSE, standardize_cov = FALSE, interaction_rule = current_interaction_rule, cat_coding_method = "difference", sample_sigma = TRUE, sigma_init = 1)
+    
+    aleph_hat   <- mean(fit_old$aleph)
+    gamma_hat   <- colMeans(fit_old$gamma)
+    gamma_int_hat <- if (!is.null(fit_old$gamma_int)) colMeans(fit_old$gamma_int) else rep(0, ncol(X_train_mat))
+    handled_old <- standardize_X_by_index_new(X_train_mat, process_data = FALSE, interaction_rule = current_interaction_rule, cat_coding_method = "difference")
+    X_std   <- handled_old$X_final
+    X_int_std <- if (!is.null(handled_old$X_int_final)) handled_old$X_int_final else matrix(0, nrow = nrow(X_std), ncol = 0)
+    
+    # Calculate CATE point estimate
+    if (is.null(fit_old$gamma_int)) {
+      treat_part_old <- aleph_hat + X_std %*% gamma_hat
+    } else {
+      treat_part_old <- aleph_hat + X_std %*% gamma_hat + X_int_std %*% gamma_int_hat
+    }
+    cate_hat_old <- as.numeric(treat_part_old)
+    
+    # Calculate posterior draws of CATE
+    if (is.null(fit_old$gamma_int)) {
+      tau_draws_old <- sweep(X_std %*% t(fit_old$gamma), 2, fit_old$aleph, "+")
+    } else {
+      tau_draws_old <- sweep(X_std %*% t(fit_old$gamma) + X_int_std %*% t(fit_old$gamma_int), 2, fit_old$aleph, "+")
+    }
+    ate_draws_old <- colMeans(tau_draws_old)
+    ate_res_old <- mean(cate_hat_old)
     
     ate_res_dr <- mean(pseudo_Y)
+    
+    # Save Posteriors
+    posteriors_list <- list(
+      beta = fit_nbcf$Beta,
+      beta_int = fit_nbcf$Beta_int,
+      alpha = fit_nbcf$alpha,
+      gamma = fit_old$gamma,
+      gamma_int = fit_old$gamma_int,
+      aleph = fit_old$aleph,
+      tau_standard_bcf = tau_draws_standard_bcf
+    )
+    saveRDS(posteriors_list, file = file.path(plot_dir, paste0("posteriors_", dataset_id, ".rds")))
     
     # Task 2: Variable Classification
     var_classes <- classify_variables(X_train_mat, fit_nbcf, cate_hat_dr, Y_comp, Z_comp, df_dr)
@@ -358,77 +433,44 @@ for (file_path in csv_files) {
     var_class_list[[dataset_id]] <- var_classes
     predictive_vars <- var_classes$Variable[var_classes$Classification %in% c("predictive", "both")]
     
-    # Task 3 & 4: Subgroup Extraction & Validation
+    # Task 3 & 4: Subgroup Extraction
     get_subgroup <- function(cate_preds, model_name) {
       tree_data <- data.frame(CATE = cate_preds, X_comp_raw)
       subgroup_tree <- rpart(CATE ~ ., data = tree_data, method = "anova", control = rpart.control(cp = 0.01, maxdepth = 3))
-      
       png(filename = file.path(plot_dir, paste0("08_Subgroup_Tree_", gsub("[ ()]", "_", model_name), ".png")), width = 2400, height = 1800, res = 300)
-      rpart.plot(subgroup_tree, type = 4, extra = 1, roundint = FALSE, main = paste("Profiting Subgroup Rule:", model_name), box.palette = c("tomato", "white", "#008080"), shadow.col = "gray", nn = TRUE)
+      rpart.plot(subgroup_tree, type = 4, extra = 1, roundint = FALSE, main = paste("Subgroup Rule:", model_name), box.palette = c("tomato", "white", "#008080"), shadow.col = "gray", nn = TRUE)
       dev.off()
-      
       tree_data$Leaf_Node <- as.factor(subgroup_tree$where)
       best_node <- (tree_data %>% group_by(Leaf_Node) %>% summarize(m = mean(CATE)) %>% arrange(desc(m)))$Leaf_Node[1]
       return(ifelse(tree_data$Leaf_Node == best_node, 1, 0))
     }
     
     sub_nbcf <- get_subgroup(cate_hat_nbcf, "BCF (Horseshoe)")
-    sub_noshrink <- get_subgroup(cate_hat_nbcf_no_shrink, "BCF (No Shrinkage)")
-    sub_hn <- get_subgroup(cate_hat_nbcf_hn, "BCF (Half-Normal)")
+    sub_standard_bcf <- get_subgroup(cate_hat_standard_bcf, "Standard BCF")
     sub_dr <- get_subgroup(cate_hat_dr, "Vansteelandt DR-Learner")
+    sub_old <- get_subgroup(cate_hat_old, "Old Linear Model")
     
-    # Majority vote
-    sub_vote <- sub_nbcf + sub_noshrink + sub_hn + sub_dr
-    final_S <- ifelse(sub_vote >= 2, 1, 0)
+    # Majority Votes
+    vote_bcf <- sub_nbcf + sub_standard_bcf + sub_old
+    vote_dr <- sub_dr
+    
+    final_S_bcf <- ifelse(vote_bcf >= 2, 1, 0)
+    final_S_dr <- vote_dr
+    final_S <- final_S_bcf # Main export uses BCF ensemble
     
     # Export datasets
     out_df <- comp_data
-    out_df$S <- final_S
-    if ("ptid" %in% names(out_df)) {
-      out_df <- out_df[order(out_df$ptid), ]
-    }
+    out_df$S_BCF <- final_S_bcf
+    out_df$S_DR <- final_S_dr
+    out_df$S <- final_S_bcf # Backward compatibility
+    
+    if ("ptid" %in% names(out_df)) out_df <- out_df[order(out_df$ptid), ]
     write.csv(out_df, file.path(sub_datasets_dir, file_name), row.names = FALSE)
     
     subgroup_prop <- mean(final_S)
-    subgroup_ate <- ifelse(sum(final_S) > 0, mean(cate_hat_nbcf[final_S == 1]), NA)
+    subgroup_ate <- mean(cate_hat_nbcf[final_S == 1])
     
     # Visualizations
-    plot_data <- data.frame(Feature_1 = X_train_mat[,1], CATE_NBCF = cate_hat_nbcf, CATE_NBCF_NoShrink = cate_hat_nbcf_no_shrink, CATE_NBCF_HN = cate_hat_nbcf_hn, CATE_DR = cate_hat_dr)
-    color_palette <- c("BCF (Horseshoe)" = "#008080", "BCF (Half-Normal)" = "dodgerblue", "BCF (No Shrinkage)" = "darkorange", "Vansteelandt DR" = "purple")
-    density_data <- data.frame(
-      CATE = c(plot_data$CATE_NBCF, plot_data$CATE_NBCF_HN, plot_data$CATE_NBCF_NoShrink, plot_data$CATE_DR),
-      Model = rep(c("BCF (Horseshoe)", "BCF (Half-Normal)", "BCF (No Shrinkage)", "Vansteelandt DR"), each = nrow(plot_data))
-    )
-    
-    p_dist <- ggplot(density_data, aes(x = CATE, fill = Model, color = Model)) +
-      geom_density(alpha = 0.25, linewidth = 1) + geom_vline(xintercept = 0, linetype = "dotted", linewidth = 1) +
-      scale_fill_manual(values = color_palette) + scale_color_manual(values = color_palette) +
-      labs(title = paste("Estimated CATEs:", dataset_id), x = "Treatment Effect", y = "Density") + theme_minimal()
-    
-    ggsave(file.path(plot_dir, paste0("02_CATE_Density_", dataset_id, ".png")), plot = p_dist, width = 8, height = 6, dpi = 150, bg = "white")
-    
-    p_het <- ggplot(plot_data) +
-      geom_smooth(aes(x = Feature_1, y = CATE_NBCF, color = "BCF (Horseshoe)"), method = "loess", se = FALSE, linewidth = 1.2) +
-      geom_smooth(aes(x = Feature_1, y = CATE_NBCF_HN, color = "BCF (Half-Normal)"), method = "loess", se = FALSE, linewidth = 1.2) +
-      geom_smooth(aes(x = Feature_1, y = CATE_NBCF_NoShrink, color = "BCF (No Shrinkage)"), method = "loess", se = FALSE, linewidth = 1.2) +
-      geom_smooth(aes(x = Feature_1, y = CATE_DR, color = "Vansteelandt DR"), method = "loess", se = FALSE, linewidth = 1.2) +
-      scale_color_manual(values = color_palette) +
-      labs(title = "Treatment Effect Heterogeneity", x = "Baseline Covariate 1", y = "Estimated CATE") + theme_minimal()
-      
-    ggsave(file.path(plot_dir, paste0("03_Heterogeneity_", dataset_id, ".png")), plot = p_het, width = 8, height = 6, dpi = 150, bg = "white")
-    
-    # 04_CATE Correlation Heatmap
-    cate_df <- data.frame(
-      "BCF (Horseshoe)" = cate_hat_nbcf,
-      "BCF (Half-Normal)" = cate_hat_nbcf_hn,
-      "BCF (No Shrinkage)" = cate_hat_nbcf_no_shrink,
-      "Vansteelandt DR" = cate_hat_dr,
-      check.names = FALSE
-    )
-    cor_matrix <- cor(cate_df)
-    cor_data <- as.data.frame(as.table(cor_matrix))
-    names(cor_data) <- c("Model1", "Model2", "Correlation")
-    p_cor_heat <- ggplot(cor_data, aes(x = Model1, y = Model2, fill = Correlation)) +
       geom_tile(color = "white", linewidth = 1) +
       geom_text(aes(label = sprintf("%.3f", Correlation)), color = ifelse(cor_data$Correlation > 0.8, "white", "black"), size = 5, fontface = "bold") +
       scale_fill_gradient2(low = "#cc0000", mid = "white", high = "#008080", midpoint = 0, limit = c(-1, 1), name = "Pearson\nCorrelation") +
@@ -438,21 +480,41 @@ for (file_path in csv_files) {
     ggsave(file.path(plot_dir, paste0("04_CATE_Correlation_Heatmap_", dataset_id, ".png")), plot = p_cor_heat, width = 8, height = 6, dpi = 150, bg = "white")
     
     # 05_Robust AUUC Uplift Curves
-    eval_df <- data.frame(Y = Y_comp, Z = Z_comp, CATE_NBCF = cate_hat_nbcf, CATE_NBCF_HN = cate_hat_nbcf_hn, CATE_NBCF_NoShrink = cate_hat_nbcf_no_shrink, CATE_DR = cate_hat_dr)
+    eval_df <- data.frame(
+      Y = Y_comp,
+      Z = Z_comp,
+      Y = Y_comp, Z = Z_comp,
+      CATE_NBCF = cate_hat_nbcf,
+      CATE_Standard_BCF = cate_hat_standard_bcf,
+      CATE_DR = cate_hat_dr,
+      CATE_Old = cate_hat_old
+    )
+    
+    get_eval_curves <- function(df, model_col, model_name) {
+      df %>%
+        arrange(desc(.data[[model_col]])) %>%
+        mutate(
+          cum_Z = cumsum(Z), cum_C = cumsum(1 - Z),
+          cum_Y_Z = cumsum(Y * Z), cum_Y_C = cumsum(Y * (1 - Z)),
+          cum_ATE = ifelse(cum_Z > 0 & cum_C > 0, (cum_Y_Z / cum_Z) - (cum_Y_C / cum_C), 0),
+          uplift = cum_ATE * (cum_Z + cum_C), frac = row_number() / n(), Model = model_name
+        ) %>%
+        dplyr::select(frac, uplift, Model)
+    }
     
     uplift_nbcf <- get_eval_curves(eval_df, "CATE_NBCF", "BCF (Horseshoe)")
-    uplift_hn <- get_eval_curves(eval_df, "CATE_NBCF_HN", "BCF (Half-Normal)")
-    uplift_noshrink <- get_eval_curves(eval_df, "CATE_NBCF_NoShrink", "BCF (No Shrinkage)")
+    uplift_standard_bcf <- get_eval_curves(eval_df, "CATE_Standard_BCF", "Standard BCF")
     uplift_dr <- get_eval_curves(eval_df, "CATE_DR", "Vansteelandt DR")
+    uplift_old <- get_eval_curves(eval_df, "CATE_Old", "Old Linear")
     
-    uplift_plot_data <- bind_rows(uplift_nbcf, uplift_hn, uplift_noshrink, uplift_dr)
+    uplift_plot_data <- bind_rows(uplift_nbcf, uplift_standard_bcf, uplift_dr, uplift_old)
     
     auuc_nbcf <- calc_auc(uplift_nbcf, "uplift")
-    auuc_hn <- calc_auc(uplift_hn, "uplift")
-    auuc_noshrink <- calc_auc(uplift_noshrink, "uplift")
+    auuc_standard_bcf <- calc_auc(uplift_standard_bcf, "uplift")
     auuc_dr <- calc_auc(uplift_dr, "uplift")
+    auuc_old <- calc_auc(uplift_old, "uplift")
     
-    auuc_label <- sprintf("AUUC:\nBCF (Horseshoe) = %.1f\nBCF (Half-Normal) = %.1f\nBCF (No Shrinkage) = %.1f\nVansteelandt DR = %.1f", auuc_nbcf, auuc_hn, auuc_noshrink, auuc_dr)
+    auuc_label <- sprintf("AUUC:\nBCF (Horseshoe) = %.1f\nStandard BCF = %.1f\nVansteelandt DR = %.1f\nOld Linear = %.1f", auuc_nbcf, auuc_standard_bcf, auuc_dr, auuc_old)
     final_uplift <- tail(uplift_nbcf$uplift, 1)
     
     p_uplift_smooth <- ggplot(uplift_plot_data, aes(x = frac, y = uplift, color = Model)) +
@@ -465,11 +527,81 @@ for (file_path in csv_files) {
       
     ggsave(file.path(plot_dir, paste0("05_AUUC_Uplift_", dataset_id, ".png")), plot = p_uplift_smooth, width = 8, height = 6, dpi = 150, bg = "white")
     
-    # Global Score Test for TEH
+    # Global Score Test for TEH (already defined earlier)
     score_p_val <- sechidis_score_test(Y_comp, X_train_mat, Z_comp, is_binary)
     score_test_significant <- !is.na(score_p_val) && (score_p_val < 0.05)
+
+    # ---------- Interval Analyses & Permutation Tests ----------
+    pb_inner$message(sprintf("[%s] Running Interval Tests and AUUC Permutations...", Sys.time()))
+    pb_inner$tick(1)
+    het_draws_nbcf <- t(t(tau_draws_nbcf) - ate_draws_nbcf)
+    het_draws_standard_bcf <- t(t(tau_draws_standard_bcf) - ate_draws_standard_bcf)
+    het_draws_old <- t(t(tau_draws_old) - ate_draws_old)
+    
+    sig_nbcf <- check_significant_individuals(het_draws_nbcf)
+    sig_standard_bcf <- check_significant_individuals(het_draws_standard_bcf)
+    sig_old <- check_significant_individuals(het_draws_old)
+    
+    perm_bcf_shoe <- auuc_permutation_test(eval_df, "CATE_NBCF", B=1000)
+    perm_standard_bcf <- auuc_permutation_test(eval_df, "CATE_Standard_BCF", B=1000)
+    perm_dr <- auuc_permutation_test(eval_df, "CATE_DR", B=1000)
+    perm_old <- auuc_permutation_test(eval_df, "CATE_Old", B=1000)
+    
+    # Export summary text file
+    summary_file <- file.path(plot_dir, paste0("results_summary_", dataset_id, ".txt"))
+    sink(summary_file)
+    cat("==================================================================\n")
+    cat(sprintf("DATASET: %s\n", dataset_id))
+    if (current_interaction_rule == "none") {
+      cat("NOTE: Covariate space > 15. Using ONLY MAIN EFFECTS for tau(x) (interaction_rule = 'none').\n")
+    } else {
+      cat(sprintf("Interaction Rule: %s\n", current_interaction_rule))
+    }
+    cat("==================================================================\n\n")
+
+    cat("--- TOP COVARIATES ---\n")
+    cat("Predictive/Both:\n")
+    print(var_classes$Variable[var_classes$Classification %in% c("predictive", "both")])
+    cat("Prognostic:\n")
+    print(var_classes$Variable[var_classes$Classification %in% c("prognostic")])
+    cat("\n")
+
+    cat("--- DR-LEARNER SUPERLEARNER WEIGHTS ---\n")
+    cat("Tau(x) Model Weights (Final):\n")
+    print(dr_tau_weights)
+    cat("\nMu(x) Model Weights (Averaged across 10 folds):\n")
+    print(dr_mu_weights)
+    cat("\n")
+
+    cat("--- AUUC SCORES & PERMUTATION TESTS (B=1000) ---\n")
+    cat(sprintf("BCF Horseshoe   : AUUC = %.1f, p-val = %.4f\n", auuc_nbcf, perm_bcf_shoe$p_val))
+    cat(sprintf("Standard BCF    : AUUC = %.1f, p-val = %.4f\n", auuc_standard_bcf, perm_standard_bcf$p_val))
+    cat(sprintf("Old Linear      : AUUC = %.1f, p-val = %.4f\n", auuc_old, perm_old$p_val))
+    cat(sprintf("DR-Learner      : AUUC = %.1f, p-val = %.4f\n", auuc_dr, perm_dr$p_val))
+    cat("\n")
+
+    cat("--- SECHIDIS GLOBAL SCORE TEST ---\n")
+    cat(sprintf("p-value: %.4f\n\n", score_p_val))
+
+    cat("--- SIGNIFICANT INDIVIDUALS (Differing from ATE) ---\n")
+    cat(sprintf("Total Individuals: %d\n\n", sig_nbcf$n_total))
+    
+    print_sig <- function(name, sig_list) {
+      cat(sprintf("%s:\n", name))
+      cat(sprintf("  Tolerance Interval: %d (%.1f%%)\n", sig_list$tolerance_sig, 100 * sig_list$tolerance_sig / sig_list$n_total))
+      cat(sprintf("  Wan Interval      : %d (%.1f%%)\n", sig_list$wan_sig, 100 * sig_list$wan_sig / sig_list$n_total))
+      cat(sprintf("  Sechidis Interval : %d (%.1f%%)\n\n", sig_list$sechidis_sig, 100 * sig_list$sechidis_sig / sig_list$n_total))
+    }
+    
+    print_sig("BCF Horseshoe", sig_nbcf)
+    print_sig("Standard BCF", sig_standard_bcf)
+    print_sig("Old Linear Model", sig_old)
+    
+    sink()
     
     # Compile Results
+    pb_inner$tick(1)
+    
     heterogeneity_present <- (sum(final_S) > 0) && (sum(final_S) < length(final_S))
     final_heterogeneity_decision <- heterogeneity_present | score_test_significant
     
@@ -488,6 +620,7 @@ for (file_path in csv_files) {
     
   }, error = function(e) {
     cat(sprintf("\nError processing %s: %s\n", file_name, e$message))
+    traceback(x = e)
   })
   
   pb$tick()

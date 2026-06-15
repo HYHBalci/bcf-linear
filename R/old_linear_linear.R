@@ -2,7 +2,6 @@ library(stochtree)
 library(BayesLogit)
 library(MASS)
 library(stochtree)
-sourceCpp("src/horseshoe_samplers.cpp")
 
 create_interaction_pairs_R <- function(p_main_local, boolean_continous) {
   pairs_local <- list()
@@ -120,6 +119,8 @@ fit_grouped_horseshoes_R <- function(
     boolean_continuous <- as.vector(X_final_var_info$is_continuous)
   } else if(interaction_rule == 'continuous_or_binary'){
     boolean_continuous <- as.vector(X_final_var_info$is_continuous) + as.vector(X_final_var_info$is_binary)
+  } else if(interaction_rule == 'none'){
+    boolean_continuous <- rep(0, nrow(X_final_var_info))
   } else { #This means we allow all interactions. 
     boolean_continuous <- as.vector(X_final_var_info$is_continuous) + as.vector(X_final_var_info$is_binary) + as.vector(X_final_var_info$is_categorical)
   }
