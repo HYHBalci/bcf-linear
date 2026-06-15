@@ -101,6 +101,7 @@ standardize_X_by_index_new <- function(X_initial, process_data = TRUE, interacti
   }
   return(list(X_final = X_final, p_int = p_int_calculated, non_continous_idx_cpp = non_continous_idx_cpp, X_final_var_info = X_final_var_info))
 }
+standardize_X_by_index <- standardize_X_by_index_new
 
 predict_linear_bcf_patched <- function(object, X, Z, propensity = NULL, rfx_group_ids = NULL, rfx_basis = NULL, ...) {
   if ((!is.data.frame(X)) && (!is.matrix(X))) stop("X must be a matrix or dataframe")
@@ -545,9 +546,18 @@ for (file_path in csv_files) {
     get_subgroup <- function(cate_preds, model_name) {
       tree_data <- data.frame(CATE = cate_preds, X_comp_raw)
       subgroup_tree <- rpart(CATE ~ ., data = tree_data, method = "anova", control = rpart.control(cp = 0.01, maxdepth = 3))
-      png(filename = file.path(plot_dir, paste0("08_Subgroup_Tree_", gsub("[ ()]", "_", model_name), ".png")), width = 2400, height = 1800, res = 300)
-      rpart.plot(subgroup_tree, type = 4, extra = 1, roundint = FALSE, main = paste("Subgroup Rule:", model_name), box.palette = c("tomato", "white", "#008080"), shadow.col = "gray", nn = TRUE)
-      dev.off()
+      
+      if (nrow(subgroup_tree$frame) > 1) {
+        png(filename = file.path(plot_dir, paste0("08_Subgroup_Tree_", gsub("[ ()]", "_", model_name), ".png")), width = 2400, height = 1800, res = 300)
+        tryCatch({
+          rpart.plot(subgroup_tree, type = 4, extra = 1, roundint = FALSE, main = paste("Subgroup Rule:", model_name), box.palette = c("tomato", "white", "#008080"), shadow.col = "gray", nn = TRUE)
+        }, error = function(e) {
+          cat("\nFailed to plot tree for", model_name, ":", e$message, "\n")
+        }, finally = {
+          dev.off()
+        })
+      }
+      
       tree_data$Leaf_Node <- as.factor(subgroup_tree$where)
       best_node <- (tree_data %>% group_by(Leaf_Node) %>% summarize(m = mean(CATE)) %>% arrange(desc(m)))$Leaf_Node[1]
       return(ifelse(tree_data$Leaf_Node == best_node, 1, 0))
@@ -591,6 +601,7 @@ for (file_path in csv_files) {
     cor_matrix <- cor(cate_df, use = "complete.obs")
     cor_data <- as.data.frame(as.table(cor_matrix))
     names(cor_data) <- c("Model1", "Model2", "Correlation")
+    cor_data$Correlation[is.na(cor_data$Correlation)] <- 0
     
     p_cor_heat <- ggplot(cor_data, aes(x = Model1, y = Model2, fill = Correlation)) +
       geom_tile(color = "white", linewidth = 1) +
@@ -813,7 +824,8 @@ for (file_path in csv_files) {
             Int_Ratio = abs(Int_Med) / (abs(Main_Med) + abs(Int_Med) + 1e-8)
           )
         
-        limit_val <- max(abs(c(plot_df_dissect$Main_Med, plot_df_dissect$Int_Med)))
+        limit_val <- max(abs(c(plot_df_dissect$Main_Med, plot_df_dissect$Int_Med)), na.rm = TRUE)
+        if (is.na(limit_val) || limit_val == 0) limit_val <- 0.1
         
         p_synergy <- ggplot(plot_df_dissect, aes(x = Main_Med, y = Int_Med, color = Feature_Value)) +
           geom_abline(intercept = 0, slope = -1, linetype = "dashed", color = "black", linewidth = 0.8) +
