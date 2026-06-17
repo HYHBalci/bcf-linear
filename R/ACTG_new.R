@@ -663,7 +663,7 @@ build_heterogeneity_plot <- function(het_draws, model_name) {
     geom_ribbon(aes(ymin = Cred_Lower, ymax = Cred_Upper, fill = "95% Credible Interval"), alpha = 0.85) +
     geom_line(aes(y = Mean), color = "black", linewidth = 0.8) +
     geom_point(data = filter(het_df, Significance != "Not Significant"), aes(y = Mean, color = Significance), size = 1.8, stroke = 0.5) +
-    scale_fill_manual(values = c("Tolerance Interval" = "#F0E442", "95% Credible Interval" = "#0072B2")) +
+    scale_fill_manual(values = c("Tolerance Interval" = "#FF8C00", "95% Credible Interval" = "#0072B2")) +
     scale_color_manual(values = c("Significant Positive (Benefit > Baseline)" = "#005a5a", "Significant Negative (Benefit < Baseline)" = "#cc0000")) +
     labs(title = paste0("Individual Treatment Effect Heterogeneity: ", model_name), subtitle = paste0(round(pct_sig, 1), "% of patients show significant deviation from baseline."), x = "Patients (Ordered by Effect Size)", y = "Heterogeneous Effect (\u0394 CATE)") +
     theme_minimal(base_size = 14) + theme(legend.position = "bottom", legend.title = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank(), panel.grid.major.x = element_blank(), panel.grid.minor.x = element_blank())
