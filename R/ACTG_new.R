@@ -358,68 +358,7 @@ fit_bcf <- bcf(
 tau_draws_bcf <- predict.bcfmodel(fit_bcf, X = X_train_mat, Z = Z_actg)$tau_hat
 cate_hat_bcf <- rowMeans(tau_draws_bcf)
 
-# B. Compute Shapley for BCF using shapr (assuming independence)
-cat("\nCalculating BCF Shapley values using 'shapr' package...\n")
-library(shapr)
 
-# Prediction wrapper for shapr
-predict_model.bcf <- function(x, newdata) {
-  # shapr generates massive synthetic matrices (e.g. 100 obs * 200 coalitions * 1000 samples = 20M rows)
-  # This easily crashes stochtree's C++ backend with vector size limits.
-  # We process predictions in chunks to prevent memory blowouts.
-  newdata_mat <- as.matrix(newdata)
-  dummy_z <- rep(1, nrow(newdata_mat))
-  
-  chunk_size <- 25000
-  n_rows <- nrow(newdata_mat)
-  preds <- numeric(n_rows)
-  
-  for (i in seq(1, n_rows, by = chunk_size)) {
-    end_idx <- min(i + chunk_size - 1, n_rows)
-    chunk_X <- newdata_mat[i:end_idx, , drop = FALSE]
-    chunk_Z <- dummy_z[i:end_idx]
-    
-    res <- predict.bcfmodel(x, X = chunk_X, Z = chunk_Z)
-    preds[i:end_idx] <- rowMeans(res$tau_hat)
-  }
-  
-  return(preds)
-}
-
-# Compute empirical Shapley values, using the mean CATE as baseline
-# Subsample x_explain to 100 rows to prevent PC from jamming (computationally heavy!)
-set.seed(42)
-explain_subset_idx <- sample(1:nrow(X_train_mat), min(100, nrow(X_train_mat)))
-
-explanation_bcf <- explain(
-  model = fit_bcf,
-  x_train = as.data.frame(X_train_mat),
-  x_explain = as.data.frame(X_train_mat)[explain_subset_idx, ],
-  approach = "empirical", 
-  phi0 = mean(cate_hat_bcf),
-  predict_model = predict_model.bcf,
-  max_n_coalitions = 2000
-)
-
-cat("\n--- BCF SHAPLEY VALUES (MEAN ABSOLUTE) ---\n")
-# Extract Shapley values (excluding the "none" baseline column)
-bcf_shap_vals <- as.matrix(explanation_bcf$dt[, -1])
-shap_abs_mean <- colMeans(abs(bcf_shap_vals))
-print(sort(shap_abs_mean, decreasing = TRUE))
-
-shap_df <- data.frame(
-  Feature = names(shap_abs_mean),
-  Importance = shap_abs_mean
-)
-shap_df <- shap_df[order(shap_df$Importance, decreasing = FALSE), ]
-shap_df$Feature <- factor(shap_df$Feature, levels = shap_df$Feature)
-
-p_shap_bcf <- ggplot(shap_df, aes(x = Importance, y = Feature)) +
-  geom_col(fill = "#d95f02", alpha = 0.8) +
-  labs(title = "Standard BCF: Shapley Importance", x = "Mean Absolute Shapley Value", y = "Feature") +
-  theme_minimal(base_size = 14)
-
-print(p_shap_bcf)
 
 # ---------------------------------------------------------
 # MODEL C: DR-Learner via SuperLearner
@@ -596,7 +535,7 @@ shapley_results <- compute_shapley_all(X = X_actg, beta_post = fit_nbcf$Beta, be
 p_shap_importance <- plot_shapley_importance_breakdown(shapley_results) + labs(title = "Semi-Parametric BART: Shapley Importance")
 print(p_shap_importance)
 
-# (Standard BCF Shapley values were computed and plotted earlier)
+
 
 # # B. Compute Vansteelandt Leave-One-Out (LOO) TE-VIMs for the DR-Learner
 # cat("\nCalculating Vansteelandt LOO TE-VIMs using SuperLearner...\n")
@@ -760,7 +699,6 @@ ggsave(file.path(plot_dir, "03_SemiParametric_Shapley_New.png"), p_shap_importan
 ggsave(file.path(plot_dir, "05_Robust_Uplift_Curve_Comparison_New.png"), p_uplift_smooth, width = plot_w, height = plot_h, dpi = plot_dpi, bg = "white")
 ggsave(file.path(plot_dir, "06a_Heterogeneity_Bands_SemiParametric_New.png"), p_het_nbcf, width = 10, height = 7, dpi = plot_dpi, bg = "white")
 ggsave(file.path(plot_dir, "06b_Heterogeneity_Bands_Standard_BCF_New.png"), p_het_bcf, width = 10, height = 7, dpi = plot_dpi, bg = "white")
-ggsave(file.path(plot_dir, "03b_Standard_BCF_Shapley_New.png"), p_shap_bcf, width = plot_w, height = plot_h, dpi = plot_dpi, bg = "white")
 
 cat(sprintf("All plots successfully saved to: %s\n", plot_dir)) 
 
