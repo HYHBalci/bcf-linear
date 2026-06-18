@@ -300,12 +300,19 @@ results_actg <- standardize_X_by_index_new(
 X_all_mat <- results_actg$X_final
 
 # ==============================================================================
-# 3b. 5-FOLD CV SETUP & STORAGE
+# 3b. 10-FOLD CV SETUP & STORAGE (Multiple Seeds)
 # ==============================================================================
-set.seed(123)
-n_total <- nrow(X_all_mat)
-K_folds <- 5
-fold_ids_outer <- sample(rep(1:K_folds, length.out = n_total))
+cv_seeds <- c(123, 456, 789) # You can change or add more seeds here
+
+for (current_seed in cv_seeds) {
+  cat(sprintf("\n====================================================================\n"))
+  cat(sprintf("   STARTING NEW 10-FOLD CV ITERATION (SEED: %d)\n", current_seed))
+  cat(sprintf("====================================================================\n"))
+  
+  set.seed(current_seed)
+  n_total <- nrow(X_all_mat)
+  K_folds <- 10
+  fold_ids_outer <- sample(rep(1:K_folds, length.out = n_total))
 
 oos_cate_nbcf <- numeric(n_total)
 oos_cate_bcf <- numeric(n_total)
@@ -352,9 +359,9 @@ general_params_bcf <- list(
 sl_library <- c("SL.glm", "SL.glmnet", "SL.gam", "SL.xgboost", "SL.ranger")
 
 # ==============================================================================
-# 4 & 5. FIT MODELS & INFERENCE IN 5-FOLD CV
+# 4 & 5. FIT MODELS & INFERENCE IN 10-FOLD CV
 # ==============================================================================
-cat("\nStarting 5-Fold CV... (Grab a coffee, this takes time)\n")
+cat("\nStarting 10-Fold CV (90/10 Splits)... (Grab a coffee, this takes time)\n")
 cv_start_time <- Sys.time()
 
 for (k in 1:K_folds) {
@@ -614,7 +621,7 @@ p_uplift_smooth <- ggplot(uplift_plot_data, aes(x = frac, y = uplift, color = Mo
   annotate("segment", x = 0, y = 0, xend = 1, yend = final_uplift, color = "black", linetype = "dashed", linewidth = 0.8) +
   annotate("label", x = 0.95, y = min(uplift_plot_data$uplift, na.rm = TRUE), 
            label = auuc_label, hjust = 1, vjust = 0, fontface = "bold", size = 4.5, color = "black", fill = "white", alpha = 0.85, label.size = NA) +
-  labs(title = "Pooled Out-of-Sample Robust Uplift Curves", subtitle = "Evaluated on the 5-Fold Cross-Validated predictions",
+  labs(title = "Pooled Out-of-Sample Robust Uplift Curves", subtitle = "Evaluated on the 10-Fold Cross-Validated predictions",
        x = "Fraction of Population Treated", y = "Cumulative True Uplift") +
   scale_color_manual(values = colors_3way) + theme_minimal(base_size = 14) + theme(plot.title = element_text(face = "bold"), legend.position = "bottom")
 
@@ -694,7 +701,7 @@ print(p_het_bcf)
 # ==============================================================================
 # 13. SAVE PLOTS TO LOCAL DIRECTORY
 # ==============================================================================
-plot_dir <- "plots/ACTG_cross"
+plot_dir <- sprintf("plots/ACTG_cross_seed_%d", current_seed)
 if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
 
 plot_w <- 8; plot_h <- 6; plot_dpi <- 300
@@ -708,3 +715,5 @@ ggsave(file.path(plot_dir, "06a_Heterogeneity_Bands_SemiParametric.png"), p_het_
 ggsave(file.path(plot_dir, "06b_Heterogeneity_Bands_Standard_BCF.png"), p_het_bcf, width = 10, height = 7, dpi = plot_dpi, bg = "white")
 
 cat(sprintf("All out-of-sample plots successfully saved to: %s\n", plot_dir))
+
+} # End of multiple seeds loop
