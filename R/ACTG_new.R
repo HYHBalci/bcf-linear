@@ -1,3 +1,23 @@
+
+# ==========================================
+# AUTO-INJECTED ETA TIMER
+# ==========================================
+total_models_to_run <- 3
+models_run <- 0
+
+bcf_linear_probit_eta <- function(...) {
+  t0 <- Sys.time()
+  res <- bcf_linear_probit(...)
+  t1 <- Sys.time()
+  dur <- as.numeric(difftime(t1, t0, units="mins"))
+  models_run <<- models_run + 1
+  models_left <- total_models_to_run - models_run
+  eta_mins <- dur * models_left
+  cat(sprintf("\n[TIMER] Model finished in %.2f mins. %d models left. ETA: %.2f mins\n\n", dur, models_left, eta_mins))
+  return(res)
+}
+# ==========================================
+
 # ==============================================================================
 # 1. LOAD LIBRARIES
 # ==============================================================================
@@ -326,7 +346,7 @@ general_params_nbcf <- list(
   sigma_residual = 0, hn_scale = 0, use_ncp = FALSE, n_tijn = 1
 )
 
-fit_nbcf <- bcf_linear_probit(
+fit_nbcf <- bcf_linear_probit_eta(
   X_train = X_train_mat, y_train = Y_actg, Z_train = Z_actg - 0.5,
   num_gfr = 50, num_burnin = 2000, num_mcmc = 4000,
   general_params = general_params_nbcf
@@ -339,7 +359,7 @@ cat("  Fitting Semi-Parametric BART (No Shrinkage)...\n")
 general_params_nbcf_noshrink <- general_params_nbcf
 general_params_nbcf_noshrink$sample_global_prior <- "none"
 
-fit_nbcf_noshrink <- bcf_linear_probit(
+fit_nbcf_noshrink <- bcf_linear_probit_eta(
   X_train = X_train_mat, y_train = Y_actg, Z_train = Z_actg - 0.5,
   num_gfr = 50, num_burnin = 2000, num_mcmc = 4000,
   general_params = general_params_nbcf_noshrink
@@ -352,7 +372,7 @@ cat("  Fitting Semi-Parametric BART (OLS)...\n")
 general_params_nbcf_ols <- general_params_nbcf
 general_params_nbcf_ols$sample_global_prior <- "OLS"
 
-fit_nbcf_ols <- bcf_linear_probit(
+fit_nbcf_ols <- bcf_linear_probit_eta(
   X_train = X_train_mat, y_train = Y_actg, Z_train = Z_actg - 0.5,
   num_gfr = 50, num_burnin = 2000, num_mcmc = 4000,
   general_params = general_params_nbcf_ols

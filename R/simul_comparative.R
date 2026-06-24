@@ -1,3 +1,23 @@
+
+# ==========================================
+# AUTO-INJECTED ETA TIMER
+# ==========================================
+total_models_to_run <- 5
+models_run <- 0
+
+bcf_linear_probit_eta <- function(...) {
+  t0 <- Sys.time()
+  res <- bcf_linear_probit(...)
+  t1 <- Sys.time()
+  dur <- as.numeric(difftime(t1, t0, units="mins"))
+  models_run <<- models_run + 1
+  models_left <- total_models_to_run - models_run
+  eta_mins <- dur * models_left
+  cat(sprintf("\n[TIMER] Model finished in %.2f mins. %d models left. ETA: %.2f mins\n\n", dur, models_left, eta_mins))
+  return(res)
+}
+# ==========================================
+
 # ==============================================================================
 # 1. LOAD LIBRARIES
 # ==============================================================================
@@ -334,19 +354,19 @@ run_simulation_scenario <- function(error_dist_scenario, n_sim = 500) {
   cat("  Fitting Standard (Half-Cauchy)...\n")
   params_std <- general_params_base
   params_std$sample_global_prior <- "half-cauchy"
-  fit_std <- bcf_linear_probit(X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_std)
+  fit_std <- bcf_linear_probit_eta(X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_std)
   
   # 2. None
   cat("  Fitting No Shrinkage (none)...\n")
   params_none <- general_params_base
   params_none$sample_global_prior <- "none"
-  fit_none <- bcf_linear_probit(X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_none)
+  fit_none <- bcf_linear_probit_eta(X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_none)
   
   # 3. OLS
   cat("  Fitting OLS Shrinkage...\n")
   params_ols <- general_params_base
   params_ols$sample_global_prior <- "OLS"
-  fit_ols <- bcf_linear_probit(X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_ols)
+  fit_ols <- bcf_linear_probit_eta(X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_ols)
   
   # 4. Robust t-distribution
   cat("  Fitting Robust t-distribution...\n")
@@ -354,13 +374,13 @@ run_simulation_scenario <- function(error_dist_scenario, n_sim = 500) {
   params_tdist$sample_global_prior <- "half-cauchy"
   params_tdist$robust <- TRUE
   params_tdist$robust_nu <- 3
-  fit_tdist <- bcf_linear_probit(X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_tdist)
+  fit_tdist <- bcf_linear_probit_eta(X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_tdist)
   
   # 5. Hybrid
   cat("  Fitting Hybrid Shrinkage...\n")
   params_hybrid <- general_params_base
   params_hybrid$sample_global_prior <- "hybrid"
-  fit_hybrid <- bcf_linear_probit(X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_hybrid)
+  fit_hybrid <- bcf_linear_probit_eta(X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_hybrid)
   
   cate_std <- rowMeans(predict_linear_bcf_patched(fit_std, X = X_sim_mat, Z = Z_sim)$tau_hat)
   cate_none <- rowMeans(predict_linear_bcf_patched(fit_none, X = X_sim_mat, Z = Z_sim)$tau_hat)
