@@ -775,26 +775,41 @@ p_uplift_smooth_semi <- ggplot(uplift_plot_data_semi, aes(x = frac, y = uplift, 
 # ==============================================================================
 cat("\n--- QUANTIFYING SIGNIFICANT HETEROGENEITY (POOLED OOS PATIENTS) ---\n")
 
-postsum <- function(posters, conf = 0.05) {
-  qs <- quantile(posters, p = c(conf/2, 1 - conf/2))
-  mn <- mean(posters)
-  return(c(qs[1], mn, qs[2]))
+# Optimized function to compute credible intervals and means for each patient
+intfrompost1 <- function(post, conf = 0.05) {
+  p_low <- conf / 2
+  p_high <- 1 - (conf / 2)
+  # Vectorized quantile per row
+  qs <- t(apply(post, 1, quantile, probs = c(p_low, p_high), names = FALSE))
+  mns <- rowMeans(post)
+  return(cbind(qs[, 1], mns, qs[, 2]))
 }
 
-intfrompost1 <- function(post, conf = 0.05){ t(apply(post, 1, postsum, conf = conf)) }
-
-conftol <- function(margconf = 0.05, post, tol = 0.05){
-  int <- intfrompost1(post, conf = margconf)
-  difl <- ((post - int[,1]) >= 0) * ((post - int[,3]) <= 0)
-  cs <- colMeans(difl)
-  return(mean(cs >= 1 - tol))
-} 
-
-findconfglob <- function(post, tol = 0.05){
+# Optimized function to find the global tolerance band with minimal memory footprint
+findconfglob <- function(post, tol = 0.05) {
   grid <- seq(0.0005, 0.05, by = 0.0005)
-  conftols <- sapply(grid, conftol, post = post, tol = tol)
+  
+  # Pre-sort each row once to avoid repeated quantile calls!
+  post_sorted <- t(apply(post, 1, sort, method = "quick"))
+  S <- ncol(post_sorted)
+  
+  conftols <- sapply(grid, function(margconf) {
+    p_low <- margconf / 2
+    p_high <- 1 - (margconf / 2)
+    
+    idx_low <- max(1, round(S * p_low))
+    idx_high <- min(S, round(S * p_high))
+    
+    int_lower <- post_sorted[, idx_low]
+    int_upper <- post_sorted[, idx_high]
+    
+    difl <- (post >= int_lower) & (post <= int_upper)
+    cs <- colMeans(difl)
+    return(mean(cs >= 1 - tol))
+  })
+  
   wm <- which(conftols - 0.95 < 0)[1] - 1
-  if(is.na(wm) || wm < 1) return(0.0005) 
+  if (is.na(wm) || wm < 1) return(0.0005) 
   return(grid[wm])
 }
 
