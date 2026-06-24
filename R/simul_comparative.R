@@ -7,10 +7,11 @@ library(tidyr)
 library(stochtree)   # Semi-Parametric BCF method
 source('R/shapley_aux.R', local = TRUE)
 
+dir.create("plots", showWarnings = FALSE)
+
 # ==============================================================================
 # 2. HELPER FUNCTIONS: PREPROCESSING & PATCHED PREDICTIONS
 # ==============================================================================
-# From ACTG_new.R
 standardize_X_by_index_new <- function(X_initial,
                                        process_data = TRUE,
                                        interaction_rule = c("continuous", "continuous_or_binary", "all"),
@@ -175,8 +176,22 @@ predict_linear_bcf_patched <- function(object, X, Z, propensity = NULL, rfx_grou
   return(result)
 }
 
+# Uplift functions
+get_eval_curves <- function(df, model_col, model_name) {
+  df %>%
+    arrange(desc(.data[[model_col]])) %>%
+    mutate(
+      cum_Z = cumsum(Z), cum_C = cumsum(1 - Z),
+      cum_Y_Z = cumsum(Y * Z), cum_Y_C = cumsum(Y * (1 - Z)),
+      cum_ATE = ifelse(cum_Z > 0 & cum_C > 0, (cum_Y_Z / cum_Z) - (cum_Y_C / cum_C), 0),
+      uplift = cum_ATE * (cum_Z + cum_C), frac = row_number() / n(), Model = model_name
+    ) %>%
+    dplyr::select(frac, uplift, Model)
+}
+calc_auc <- function(df, metric) { sum(diff(df$frac) * (head(df[[metric]], -1) + tail(df[[metric]], -1)) / 2) }
+
 # ==============================================================================
-# 3. DATA SIMULATION (From simul_1.R)
+# 3. DATA SIMULATION 
 # ==============================================================================
 generate_data_medical <- function(n = 250,
                                   is_te_hetero = TRUE,
@@ -187,7 +202,8 @@ generate_data_medical <- function(n = 250,
                                   z_diff = FALSE, 
                                   contrast_binary = TRUE, 
                                   BCF = FALSE, 
-                                  sigma_sq = 1) {
+                                  sigma_sq = 1,
+                                  error_dist = "normal") {
   set.seed(seed)
   
   x1 <- rnorm(n, mean=0, sd=1)
@@ -239,7 +255,14 @@ generate_data_medical <- function(n = 250,
   
   pi_x <- pmin(pmax(pi_x, 0), 1)
   z <- rbinom(n, size=1, prob=pi_x)
-  eps <- rnorm(n, 0, sqrt(sigma_sq))
+  
+  if (error_dist == "normal") {
+    eps <- rnorm(n, 0, sqrt(sigma_sq))
+  } else if (error_dist == "contaminated") {
+    # 2.5% outliers with much larger variance
+    is_outlier <- rbinom(n, 1, 0.025)
+    eps <- rnorm(n, 0, sqrt(sigma_sq)) + is_outlier * rnorm(n, 0, 10 * sqrt(sigma_sq))
+  }
   
   if(BCF){
     z_binary <- z
@@ -278,23 +301,8 @@ generate_data_medical <- function(n = 250,
   return(df)
 }
 
-cat("\n--- GENERATING SIMULATED DATA ---\n")
-n_sim <- 500
-df_sim <- generate_data_medical(n = n_sim, is_te_hetero = TRUE, is_mu_nonlinear = TRUE, RCT = FALSE, z_diff = 0.5)
-
-X_sim_mat <- df_sim %>% dplyr::select(x1, x2, x3, x4, x5_1, x5_2) %>% as.matrix()
-Y_sim <- df_sim$y
-Z_sim <- df_sim$z
-tau_true <- df_sim$tau
-
-# ==============================================================================
-# 4. FIT MODELS (Standard, None, OLS, T-distribution)
-# ==============================================================================
-cat("\nFitting Models on Simulated Data...\n")
-
 # Workaround for the scoping bug in stochtree's bcf_linear_probit.R for robust models
 probit_outcome_model <<- FALSE
-
 
 general_params_base <- list(
   cutpoint_grid_size = 100, standardize = TRUE, 
@@ -313,85 +321,127 @@ general_params_base <- list(
   sigma_residual = 0, hn_scale = 0, use_ncp = FALSE, n_tijn = 1
 )
 
-# 1. Standard (Half-Cauchy)
-cat("  Fitting Standard (Half-Cauchy)...\n")
-params_std <- general_params_base
-params_std$sample_global_prior <- "half-cauchy"
-fit_std <- bcf_linear_probit(
-  X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim,
-  num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_std
-)
+run_simulation_scenario <- function(error_dist_scenario, n_sim = 500) {
+  cat(sprintf("\n\n=== RUNNING SIMULATION SCENARIO: %s ===\n", toupper(error_dist_scenario)))
+  df_sim <- generate_data_medical(n = n_sim, is_te_hetero = TRUE, is_mu_nonlinear = TRUE, RCT = FALSE, z_diff = 0.5, error_dist = error_dist_scenario)
+  
+  X_sim_mat <- df_sim %>% dplyr::select(x1, x2, x3, x4, x5_1, x5_2) %>% as.matrix()
+  Y_sim <- df_sim$y
+  Z_sim <- df_sim$z
+  tau_true <- df_sim$tau
+  
+  # 1. Standard (Half-Cauchy)
+  cat("  Fitting Standard (Half-Cauchy)...\n")
+  params_std <- general_params_base
+  params_std$sample_global_prior <- "half-cauchy"
+  fit_std <- bcf_linear_probit(X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_std)
+  
+  # 2. None
+  cat("  Fitting No Shrinkage (none)...\n")
+  params_none <- general_params_base
+  params_none$sample_global_prior <- "none"
+  fit_none <- bcf_linear_probit(X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_none)
+  
+  # 3. OLS
+  cat("  Fitting OLS Shrinkage...\n")
+  params_ols <- general_params_base
+  params_ols$sample_global_prior <- "OLS"
+  fit_ols <- bcf_linear_probit(X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_ols)
+  
+  # 4. Robust t-distribution
+  cat("  Fitting Robust t-distribution...\n")
+  params_tdist <- general_params_base
+  params_tdist$sample_global_prior <- "half-cauchy"
+  params_tdist$robust <- TRUE
+  params_tdist$robust_nu <- 3
+  fit_tdist <- bcf_linear_probit(X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_tdist)
+  
+  # 5. Hybrid
+  cat("  Fitting Hybrid Shrinkage...\n")
+  params_hybrid <- general_params_base
+  params_hybrid$sample_global_prior <- "hybrid"
+  fit_hybrid <- bcf_linear_probit(X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_hybrid)
+  
+  cate_std <- rowMeans(predict_linear_bcf_patched(fit_std, X = X_sim_mat, Z = Z_sim)$tau_hat)
+  cate_none <- rowMeans(predict_linear_bcf_patched(fit_none, X = X_sim_mat, Z = Z_sim)$tau_hat)
+  cate_ols <- rowMeans(predict_linear_bcf_patched(fit_ols, X = X_sim_mat, Z = Z_sim)$tau_hat)
+  cate_tdist <- rowMeans(predict_linear_bcf_patched(fit_tdist, X = X_sim_mat, Z = Z_sim)$tau_hat)
+  cate_hybrid <- rowMeans(predict_linear_bcf_patched(fit_hybrid, X = X_sim_mat, Z = Z_sim)$tau_hat)
+  
+  rmse <- function(true, est) sqrt(mean((true - est)^2))
+  results_rmse <- data.frame(
+    Scenario = error_dist_scenario,
+    Method = c("Standard", "None", "OLS", "Robust t-dist", "Hybrid"),
+    RMSE = c(rmse(tau_true, cate_std), rmse(tau_true, cate_none), rmse(tau_true, cate_ols), rmse(tau_true, cate_tdist), rmse(tau_true, cate_hybrid))
+  )
+  print(results_rmse)
+  
+  # Uplift Evaluation
+  # Reconstruct Z back to 0/1 for uplift function
+  Z_binary <- ifelse(Z_sim > 0, 1, 0)
+  eval_df <- data.frame(Y = Y_sim, Z = Z_binary, 
+                        CATE_STD = cate_std, CATE_NONE = cate_none, CATE_OLS = cate_ols,
+                        CATE_TDIST = cate_tdist, CATE_HYBRID = cate_hybrid,
+                        CATE_TRUE = tau_true)
+  
+  uplift_std <- get_eval_curves(eval_df, "CATE_STD", "Standard")
+  uplift_none <- get_eval_curves(eval_df, "CATE_NONE", "None")
+  uplift_ols <- get_eval_curves(eval_df, "CATE_OLS", "OLS")
+  uplift_tdist <- get_eval_curves(eval_df, "CATE_TDIST", "Robust t-dist")
+  uplift_hybrid <- get_eval_curves(eval_df, "CATE_HYBRID", "Hybrid")
+  uplift_true <- get_eval_curves(eval_df, "CATE_TRUE", "True CATE")
+  
+  auuc_vals <- c(
+    Standard = calc_auc(uplift_std, "uplift"),
+    None = calc_auc(uplift_none, "uplift"),
+    OLS = calc_auc(uplift_ols, "uplift"),
+    Robust_tdist = calc_auc(uplift_tdist, "uplift"),
+    Hybrid = calc_auc(uplift_hybrid, "uplift"),
+    True = calc_auc(uplift_true, "uplift")
+  )
+  
+  uplift_plot_data <- bind_rows(uplift_std, uplift_none, uplift_ols, uplift_tdist, uplift_hybrid, uplift_true)
+  auuc_label <- sprintf("AUUC:\nStandard = %.1f\nNone = %.1f\nOLS = %.1f\nRobust t-dist = %.1f\nHybrid = %.1f\nTrue = %.1f", 
+                        auuc_vals["Standard"], auuc_vals["None"], auuc_vals["OLS"], auuc_vals["Robust_tdist"], auuc_vals["Hybrid"], auuc_vals["True"])
+  
+  colors_methods <- c("Standard" = "#1b9e77", "None" = "#d95f02", "OLS" = "#7570b3", "Robust t-dist" = "#e7298a", "Hybrid" = "#66a61e", "True CATE" = "black")
+  
+  p_uplift <- ggplot(uplift_plot_data, aes(x = frac, y = uplift, color = Model, linetype = Model == "True CATE")) +
+    geom_smooth(method = "loess", span = 0.15, se = FALSE, linewidth = 1.2) +
+    annotate("segment", x = 0, y = 0, xend = 1, yend = tail(uplift_true$uplift, 1), color = "gray", linetype = "dashed", linewidth = 0.8) +
+    annotate("label", x = 0.95, y = min(uplift_plot_data$uplift, na.rm = TRUE), label = auuc_label, hjust = 1, vjust = 0, fontface = "bold", size = 4, alpha = 0.85) +
+    labs(title = sprintf("Robust Uplift Curves (%s Scenario)", tools::toTitleCase(error_dist_scenario)), 
+         x = "Fraction of Population Treated", y = "Cumulative Uplift") +
+    scale_color_manual(values = colors_methods) +
+    scale_linetype_manual(values = c("TRUE" = "dashed", "FALSE" = "solid"), guide = "none") +
+    theme_minimal(base_size = 14) + theme(plot.title = element_text(face = "bold"), legend.position = "bottom")
+  
+  ggsave(sprintf("plots/simul_uplift_%s.png", error_dist_scenario), p_uplift, width = 8, height = 6)
+  
+  plot_data <- data.frame(
+    True_CATE = rep(tau_true, 5),
+    Estimated_CATE = c(cate_std, cate_none, cate_ols, cate_tdist, cate_hybrid),
+    Method = rep(c("Standard", "None", "OLS", "Robust t-dist", "Hybrid"), each = n_sim)
+  )
+  p_comp <- ggplot(plot_data, aes(x = True_CATE, y = Estimated_CATE, color = Method)) +
+    geom_point(alpha = 0.5) +
+    geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "black") +
+    facet_wrap(~Method) +
+    scale_color_manual(values = colors_methods) +
+    theme_minimal() +
+    labs(title = sprintf("True vs Estimated CATE (%s)", tools::toTitleCase(error_dist_scenario)), x = "True CATE", y = "Estimated CATE")
+  
+  ggsave(sprintf("plots/simul_scatter_%s.png", error_dist_scenario), p_comp, width = 10, height = 6)
+  
+  return(results_rmse)
+}
 
-# 2. None
-cat("  Fitting No Shrinkage (none)...\n")
-params_none <- general_params_base
-params_none$sample_global_prior <- "none"
-fit_none <- bcf_linear_probit(
-  X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim,
-  num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_none
-)
+# Run both scenarios
+rmse_normal <- run_simulation_scenario("normal")
+rmse_contaminated <- run_simulation_scenario("contaminated")
 
-# 3. OLS
-cat("  Fitting OLS Shrinkage...\n")
-params_ols <- general_params_base
-params_ols$sample_global_prior <- "OLS"
-fit_ols <- bcf_linear_probit(
-  X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim,
-  num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_ols
-)
+all_rmse <- bind_rows(rmse_normal, rmse_contaminated)
+write.csv(all_rmse, "plots/simul_comparative_rmse_all.csv", row.names = FALSE)
 
-# 4. Robust t-distribution
-cat("  Fitting Robust t-distribution...\n")
-params_tdist <- general_params_base
-params_tdist$sample_global_prior <- "half-cauchy"
-params_tdist$robust <- TRUE
-params_tdist$robust_nu <- 3
-fit_tdist <- bcf_linear_probit(
-  X_train = X_sim_mat, y_train = Y_sim, Z_train = Z_sim,
-  num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = params_tdist
-)
-
-# ==============================================================================
-# 5. COMPARE METHODS (RMSE for CATEs)
-# ==============================================================================
-cat("\n--- COMPARISON OF METHODS (CATE RMSE) ---\n")
-
-cate_std <- rowMeans(predict_linear_bcf_patched(fit_std, X = X_sim_mat, Z = Z_sim)$tau_hat)
-cate_none <- rowMeans(predict_linear_bcf_patched(fit_none, X = X_sim_mat, Z = Z_sim)$tau_hat)
-cate_ols <- rowMeans(predict_linear_bcf_patched(fit_ols, X = X_sim_mat, Z = Z_sim)$tau_hat)
-cate_tdist <- rowMeans(predict_linear_bcf_patched(fit_tdist, X = X_sim_mat, Z = Z_sim)$tau_hat)
-
-rmse <- function(true, est) sqrt(mean((true - est)^2))
-
-results_rmse <- data.frame(
-  Method = c("Standard (Half-Cauchy)", "None", "OLS", "Robust t-distribution"),
-  RMSE = c(rmse(tau_true, cate_std), rmse(tau_true, cate_none), rmse(tau_true, cate_ols), rmse(tau_true, cate_tdist))
-)
-print(results_rmse)
-write.csv(results_rmse, "simul_comparative_rmse.csv", row.names = FALSE)
-
-plot_data <- data.frame(
-  True_CATE = rep(tau_true, 4),
-  Estimated_CATE = c(cate_std, cate_none, cate_ols, cate_tdist),
-  Method = rep(c("Standard", "None", "OLS", "t-dist"), each = n_sim)
-)
-
-p_comp <- ggplot(plot_data, aes(x = True_CATE, y = Estimated_CATE, color = Method)) +
-  geom_point(alpha = 0.5) +
-  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "black") +
-  facet_wrap(~Method) +
-  theme_minimal() +
-  labs(title = "True vs Estimated CATE (Simulated Data)", x = "True CATE", y = "Estimated CATE")
-
-print(p_comp)
-ggsave("simul_comparative_plot.png", p_comp, width = 8, height = 6)
-
-cat("\nSaving model fits to RDS files...\n")
-saveRDS(fit_std, "simul_fit_std.rds")
-saveRDS(fit_none, "simul_fit_none.rds")
-saveRDS(fit_ols, "simul_fit_ols.rds")
-saveRDS(fit_tdist, "simul_fit_tdist.rds")
-
-cat("\nResults saved to 'simul_comparative_rmse.csv' and 'simul_comparative_plot.png'\n")
-cat("Model fits saved to 'simul_fit_*.rds' files.\n")
+cat("\nResults saved to 'plots/' directory.\n")
 cat("\nDone!\n")

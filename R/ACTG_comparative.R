@@ -8,6 +8,8 @@ library(speff2trial) # Contains the ACTG175 dataset
 library(stochtree)   # Semi-Parametric BCF method
 source('R/shapley_aux.R', local = TRUE)
 
+dir.create("plots", showWarnings = FALSE)
+
 # ==============================================================================
 # 2. HELPER FUNCTIONS: PREPROCESSING & PATCHED PREDICTIONS
 # ==============================================================================
@@ -175,6 +177,21 @@ predict_linear_bcf_patched <- function(object, X, Z, propensity = NULL, rfx_grou
   return(result)
 }
 
+# Uplift functions
+get_eval_curves <- function(df, model_col, model_name) {
+  df %>%
+    arrange(desc(.data[[model_col]])) %>%
+    mutate(
+      cum_Z = cumsum(Z), cum_C = cumsum(1 - Z),
+      cum_Y_Z = cumsum(Y * Z), cum_Y_C = cumsum(Y * (1 - Z)),
+      cum_ATE = ifelse(cum_Z > 0 & cum_C > 0, (cum_Y_Z / cum_Z) - (cum_Y_C / cum_C), 0),
+      uplift = cum_ATE * (cum_Z + cum_C), frac = row_number() / n(), Model = model_name
+    ) %>%
+    dplyr::select(frac, uplift, Model)
+}
+calc_auc <- function(df, metric) { sum(diff(df$frac) * (head(df[[metric]], -1) + tail(df[[metric]], -1)) / 2) }
+
+
 # ==============================================================================
 # 3. PREPARE ACTG175 DATA
 # ==============================================================================
@@ -208,7 +225,6 @@ cat("\nFitting Models on ACTG175 Data...\n")
 # Workaround for the scoping bug in stochtree's bcf_linear_probit.R for robust models
 probit_outcome_model <<- FALSE
 
-
 general_params_base <- list(
   cutpoint_grid_size = 100, standardize = TRUE, 
   sample_sigma2_global = TRUE, sigma2_global_init = 1, 
@@ -230,28 +246,19 @@ general_params_base <- list(
 cat("  Fitting Standard (Half-Cauchy)...\n")
 params_std <- general_params_base
 params_std$sample_global_prior <- "half-cauchy"
-fit_std <- bcf_linear_probit(
-  X_train = X_train_mat, y_train = Y_actg, Z_train = Z_actg - 0.5,
-  num_gfr = 50, num_burnin = 2000, num_mcmc = 4000, general_params = params_std
-)
+fit_std <- bcf_linear_probit(X_train = X_train_mat, y_train = Y_actg, Z_train = Z_actg - 0.5, num_gfr = 50, num_burnin = 2000, num_mcmc = 4000, general_params = params_std)
 
 # 2. None
 cat("  Fitting No Shrinkage (none)...\n")
 params_none <- general_params_base
 params_none$sample_global_prior <- "none"
-fit_none <- bcf_linear_probit(
-  X_train = X_train_mat, y_train = Y_actg, Z_train = Z_actg - 0.5,
-  num_gfr = 50, num_burnin = 2000, num_mcmc = 4000, general_params = params_none
-)
+fit_none <- bcf_linear_probit(X_train = X_train_mat, y_train = Y_actg, Z_train = Z_actg - 0.5, num_gfr = 50, num_burnin = 2000, num_mcmc = 4000, general_params = params_none)
 
 # 3. OLS
 cat("  Fitting OLS Shrinkage...\n")
 params_ols <- general_params_base
 params_ols$sample_global_prior <- "OLS"
-fit_ols <- bcf_linear_probit(
-  X_train = X_train_mat, y_train = Y_actg, Z_train = Z_actg - 0.5,
-  num_gfr = 50, num_burnin = 2000, num_mcmc = 4000, general_params = params_ols
-)
+fit_ols <- bcf_linear_probit(X_train = X_train_mat, y_train = Y_actg, Z_train = Z_actg - 0.5, num_gfr = 50, num_burnin = 2000, num_mcmc = 4000, general_params = params_ols)
 
 # 4. Robust t-distribution
 cat("  Fitting Robust t-distribution...\n")
@@ -259,10 +266,14 @@ params_tdist <- general_params_base
 params_tdist$sample_global_prior <- "half-cauchy"
 params_tdist$robust <- TRUE
 params_tdist$robust_nu <- 3
-fit_tdist <- bcf_linear_probit(
-  X_train = X_train_mat, y_train = Y_actg, Z_train = Z_actg - 0.5,
-  num_gfr = 50, num_burnin = 2000, num_mcmc = 4000, general_params = params_tdist
-)
+fit_tdist <- bcf_linear_probit(X_train = X_train_mat, y_train = Y_actg, Z_train = Z_actg - 0.5, num_gfr = 50, num_burnin = 2000, num_mcmc = 4000, general_params = params_tdist)
+
+# 5. Hybrid
+cat("  Fitting Hybrid Shrinkage...\n")
+params_hybrid <- general_params_base
+params_hybrid$sample_global_prior <- "hybrid"
+fit_hybrid <- bcf_linear_probit(X_train = X_train_mat, y_train = Y_actg, Z_train = Z_actg - 0.5, num_gfr = 50, num_burnin = 2000, num_mcmc = 4000, general_params = params_hybrid)
+
 
 # ==============================================================================
 # 5. INFERENCE (CATEs and ATE)
@@ -283,43 +294,102 @@ tau_tdist <- predict_linear_bcf_patched(fit_tdist, X = X_train_mat, Z = Z_actg)$
 cate_tdist <- rowMeans(tau_tdist)
 ate_tdist <- mean(colMeans(tau_tdist))
 
+tau_hybrid <- predict_linear_bcf_patched(fit_hybrid, X = X_train_mat, Z = Z_actg)$tau_hat
+cate_hybrid <- rowMeans(tau_hybrid)
+ate_hybrid <- mean(colMeans(tau_hybrid))
+
 cat("\n--- IN-SAMPLE INFERENCE RESULTS ---\n")
 cat(sprintf("Standard (Half-Cauchy) ATE: %.2f\n", ate_std))
 cat(sprintf("No Shrinkage ATE: %.2f\n", ate_none))
 cat(sprintf("OLS ATE: %.2f\n", ate_ols))
 cat(sprintf("Robust t-distribution ATE: %.2f\n", ate_tdist))
+cat(sprintf("Hybrid ATE: %.2f\n", ate_hybrid))
 
 ate_results <- data.frame(
-  Method = c("Standard (Half-Cauchy)", "None", "OLS", "Robust t-distribution"),
-  ATE = c(ate_std, ate_none, ate_ols, ate_tdist)
+  Method = c("Standard", "None", "OLS", "Robust t-dist", "Hybrid"),
+  ATE = c(ate_std, ate_none, ate_ols, ate_tdist, ate_hybrid)
 )
-write.csv(ate_results, "ACTG_comparative_ate.csv", row.names = FALSE)
+write.csv(ate_results, "plots/ACTG_comparative_ate.csv", row.names = FALSE)
 
 # ==============================================================================
-# 6. VISUALIZATION
+# 6. VISUALIZATION & UPLIFT
 # ==============================================================================
+colors_methods <- c("Standard" = "#1b9e77", "None" = "#d95f02", "OLS" = "#7570b3", "Robust t-dist" = "#e7298a", "Hybrid" = "#66a61e")
+
+# Density Plot
 density_data <- data.frame(
-  CATE = c(cate_std, cate_none, cate_ols, cate_tdist),
-  Model = rep(c("Standard", "None", "OLS", "t-dist"), each = length(cate_std))
+  CATE = c(cate_std, cate_none, cate_ols, cate_tdist, cate_hybrid),
+  Model = rep(c("Standard", "None", "OLS", "Robust t-dist", "Hybrid"), each = length(cate_std))
 )
-
 p_dist <- ggplot(density_data, aes(x = CATE, fill = Model, color = Model)) +
   geom_density(alpha = 0.3, linewidth = 1) +
   geom_vline(xintercept = 0, linetype = "dotted", linewidth = 1) +
-  labs(title = "Distribution of Estimated CATEs",
-       x = "Treatment Effect (Difference in CD4 at 20 Weeks)", y = "Density") +
+  scale_fill_manual(values = colors_methods) +
+  scale_color_manual(values = colors_methods) +
+  labs(title = "Distribution of Estimated CATEs", x = "Treatment Effect (Difference in CD4 at 20 Weeks)", y = "Density") +
+  theme_minimal(base_size = 14) + theme(plot.title = element_text(face = "bold"), legend.position = "bottom")
+
+ggsave("plots/ACTG_comparative_density.png", p_dist, width = 8, height = 6)
+
+# Uplift
+eval_df <- data.frame(Y = Y_actg, Z = Z_actg, 
+                      CATE_STD = cate_std, CATE_NONE = cate_none, CATE_OLS = cate_ols,
+                      CATE_TDIST = cate_tdist, CATE_HYBRID = cate_hybrid)
+
+uplift_std <- get_eval_curves(eval_df, "CATE_STD", "Standard")
+uplift_none <- get_eval_curves(eval_df, "CATE_NONE", "None")
+uplift_ols <- get_eval_curves(eval_df, "CATE_OLS", "OLS")
+uplift_tdist <- get_eval_curves(eval_df, "CATE_TDIST", "Robust t-dist")
+uplift_hybrid <- get_eval_curves(eval_df, "CATE_HYBRID", "Hybrid")
+
+auuc_vals <- c(
+  Standard = calc_auc(uplift_std, "uplift"),
+  None = calc_auc(uplift_none, "uplift"),
+  OLS = calc_auc(uplift_ols, "uplift"),
+  Robust_tdist = calc_auc(uplift_tdist, "uplift"),
+  Hybrid = calc_auc(uplift_hybrid, "uplift")
+)
+
+uplift_plot_data <- bind_rows(uplift_std, uplift_none, uplift_ols, uplift_tdist, uplift_hybrid)
+auuc_label <- sprintf("AUUC:\nStandard = %.1f\nNone = %.1f\nOLS = %.1f\nRobust t-dist = %.1f\nHybrid = %.1f", 
+                      auuc_vals["Standard"], auuc_vals["None"], auuc_vals["OLS"], auuc_vals["Robust_tdist"], auuc_vals["Hybrid"])
+
+p_uplift <- ggplot(uplift_plot_data, aes(x = frac, y = uplift, color = Model)) +
+  geom_smooth(method = "loess", span = 0.15, se = FALSE, linewidth = 1.2) +
+  annotate("segment", x = 0, y = 0, xend = 1, yend = tail(uplift_std$uplift, 1), color = "black", linetype = "dashed", linewidth = 0.8) +
+  annotate("label", x = 0.95, y = min(uplift_plot_data$uplift, na.rm = TRUE), label = auuc_label, hjust = 1, vjust = 0, fontface = "bold", size = 4, alpha = 0.85) +
+  labs(title = "Robust Uplift Curves (ACTG175)", x = "Fraction of Population Treated", y = "Cumulative True Uplift (Adjusted CD4 Gain)") +
+  scale_color_manual(values = colors_methods) +
+  theme_minimal(base_size = 14) + theme(plot.title = element_text(face = "bold"), legend.position = "bottom")
+
+ggsave("plots/ACTG_comparative_uplift.png", p_uplift, width = 8, height = 6)
+
+# Correlation Heatmap
+cate_df_all <- data.frame(
+  "Standard" = cate_std,
+  "None" = cate_none,
+  "OLS" = cate_ols,
+  "Robust t-dist" = cate_tdist,
+  "Hybrid" = cate_hybrid,
+  check.names = FALSE
+)
+
+cor_matrix <- cor(cate_df_all)
+cor_data <- as.data.frame(as.table(cor_matrix))
+names(cor_data) <- c("Model1", "Model2", "Correlation")
+
+p_cor_heat <- ggplot(cor_data, aes(x = Model1, y = Model2, fill = Correlation)) +
+  geom_tile(color = "white", linewidth = 1) +
+  geom_text(aes(label = sprintf("%.3f", Correlation)), color = ifelse(cor_data$Correlation > 0.8, "white", "black"), size = 6, fontface = "bold") +
+  scale_fill_gradient2(low = "#cc0000", mid = "white", high = "#008080", midpoint = 0, limit = c(-1, 1), space = "Lab", name = "Pearson\nCorrelation") +
+  labs(title = "CATE Correlation Heatmap", subtitle = "Pairwise agreement between model priors on ACTG175") +
   theme_minimal(base_size = 14) +
-  theme(plot.title = element_text(face = "bold"), legend.position = "bottom")
+  theme(axis.title.x = element_blank(), axis.title.y = element_blank(),
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.border = element_blank(), axis.text.x = element_text(angle = 15, vjust = 1, hjust = 1, face = "bold"),
+        axis.text.y = element_text(face = "bold"), plot.title = element_text(face = "bold"), legend.position = "right")
 
-print(p_dist)
-ggsave("ACTG_comparative_plot.png", p_dist, width = 8, height = 6)
+ggsave("plots/ACTG_comparative_correlation.png", p_cor_heat, width = 8, height = 6)
 
-cat("\nSaving model fits to RDS files...\n")
-saveRDS(fit_std, "ACTG_fit_std.rds")
-saveRDS(fit_none, "ACTG_fit_none.rds")
-saveRDS(fit_ols, "ACTG_fit_ols.rds")
-saveRDS(fit_tdist, "ACTG_fit_tdist.rds")
-
-cat("\nResults saved to 'ACTG_comparative_ate.csv' and 'ACTG_comparative_plot.png'\n")
-cat("Model fits saved to 'ACTG_fit_*.rds' files.\n")
+cat("\nResults saved to 'plots/' directory.\n")
 cat("\nDone!\n")
