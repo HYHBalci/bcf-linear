@@ -3,8 +3,7 @@ generate_data_medical <- function(n = 250,
                                   is_mu_nonlinear = TRUE, 
                                   seed = 1848, 
                                   RCT = FALSE, 
-                                  # New Argument to toggle specific scenarios
-                                  scenario = "default", # Options: "default", "complex_interaction", "medical_saturation"
+                                  scenario = "default", 
                                   z_diff = FALSE, 
                                   contrast_binary = TRUE, 
                                   BCF = FALSE, 
@@ -12,21 +11,15 @@ generate_data_medical <- function(n = 250,
   set.seed(seed)
   
   # -- 1. Generate covariates --
-  # x1: Continuous (e.g., Biomarker / Age / BMI)
   x1 <- rnorm(n, mean=0, sd=1)
-  # x2: Continuous (e.g., Blood Pressure)
   x2 <- rnorm(n, mean=0, sd=1)
-  # x3: Continuous (e.g., Lab value)
   x3 <- rnorm(n, mean=0, sd=1)
-  # x4: Binary (e.g., Sex or Comorbidity)
   x4 <- rbinom(n, size=1, prob=0.5)
   if(contrast_binary){
     x4 <- 2 * x4 - 1
   }
-  # x5: Categorical (e.g., Hospital Site or Region)
   x5_raw <- sample(1:3, size=n, replace=TRUE, prob=c(1/3,1/3,1/3))
   
-  # Define function for categorical effect
   g_func <- function(x5) {
     out <- rep(NA, length(x5))
     out[x5 == 1] <-  2
@@ -34,7 +27,6 @@ generate_data_medical <- function(n = 250,
     out[x5 == 3] <- -4
     return(out)
   }
-  
   g_x5 <- g_func(x5_raw)
   
   # -- 2. Prognostic function mu(x) --
@@ -50,15 +42,17 @@ generate_data_medical <- function(n = 250,
   } else {
     
     if(scenario == "complex_interaction"){ 
-      # Previous "test" logic: High complexity polynomial interaction
       tau_vec <- 1 + 4*x1 + 3*x2 + 2*x2*x1
       
     } else if(scenario == "medical_saturation"){
-      # NEW SCENARIO: Non-linear Sigmoid Saturation
-      # x1 acts as a biomarker. 
-      # Patients with low x1 get a small baseline benefit (0.5).
-      # As x1 increases, benefit grows rapidly but caps at 4.5 (saturation).
+      # STEEP SATURATION (Original - Adverse for Semi-Parametric)
       tau_vec <- 0.5 + 4 / (1 + exp(-2.5 * x1))
+      
+    } else if(scenario == "mild_saturation"){
+      # MILD SATURATION (Favorable for Semi-Parametric)
+      # Baseline (0.5) and amplitude (4) are kept exactly as is.
+      # Only the steepness is reduced to 0.6 to approximate a linear gradient.
+      tau_vec <- 0.5 + 4 / (1 + exp(-0.6 * x1))
       
     } else {
       # Default linear interaction
@@ -89,7 +83,6 @@ generate_data_medical <- function(n = 250,
     z_binary <- z
   }
   
-  # Handle Z difference/centering if requested
   if(is.logical(z_diff)){
     delta <- if(z_diff) 0.5 else 0
   } else {
@@ -100,7 +93,6 @@ generate_data_medical <- function(n = 250,
     z <- z - delta
   }
   
-  # Calculate Outcome
   y <- mu + z*tau_vec + eps
   y_hat <- mu + z*tau_vec
   
@@ -139,8 +131,8 @@ library(stochtree)
 n_simul <- 50
 heter   <- c(TRUE,FALSE)
 linear  <- c(TRUE,FALSE)
-n_vals  <- c(1000)
-scenarios <- c("default","medical_saturation") # Add scenarios here
+n_vals  <- c(250, 500, 750, 1000, 1500, 3000)
+scenarios <- c("mild_saturation") # Add scenarios here
 num_chains <- 1 # Ensure this is defined for the params list
 
 # -- Main Loop --
@@ -152,7 +144,7 @@ for (scen in scenarios) {
     if (het == FALSE && scen != "default") next
     
     for (lin in linear) {
-        
+      
       for (n_obser in n_vals) {
         for (i in 1:n_simul) {
           
@@ -213,8 +205,9 @@ for (scen in scenarios) {
           
         } 
       } # end n
-    
+      
     } # end linear
   } # end heter
 } # end scenarios
 source('R/export_import.R')
+
