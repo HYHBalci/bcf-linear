@@ -3,7 +3,7 @@
 # ==============================================================================
 cv_seeds <- c(123, 456, 789)
 K_folds <- 10
-total_models_to_run <- length(cv_seeds) * K_folds * 4
+total_models_to_run <- length(cv_seeds) * K_folds * 9
 models_run <- 0
 
 bcf_linear_probit_eta <- function(...) {
@@ -29,16 +29,11 @@ library(glmnet)
 library(gam)
 library(xgboost)
 library(ranger)
+library(grf)
 library(coda)
 library(foreach)
 library(doParallel)
 source('R/shapley_aux.R')
-
-# Setup parallel cluster
-num_cores <- max(1, parallel::detectCores() - 1)
-cl <- makeCluster(num_cores, outfile = "")
-registerDoParallel(cl)
-cat(sprintf("\n[INFO] Registered Parallel Cluster with %d cores\n", num_cores))
 
 # ==============================================================================
 # 2. HELPER FUNCTIONS: PREPROCESSING & PATCHED PREDICTIONS
@@ -410,19 +405,11 @@ for (current_seed in cv_seeds) {
   # ==============================================================================
   # 4 & 5. FIT MODELS & INFERENCE IN 10-FOLD CV
   # ==============================================================================
-  library(doParallel)
-  registerDoParallel(cores = parallel::detectCores() - 1)
-  
   cat("\nStarting 10-Fold CV (90/10 Splits)... (Grab a coffee, this takes time)\n")
   cv_start_time <- Sys.time()
   
   # Parallel execution of K_folds
-  fold_results <- foreach(k = 1:K_folds, 
-                          .packages = c("stochtree", "dplyr", "tidyr", "SuperLearner", "glmnet", "gam", "xgboost", "ranger", "grf"),
-                          .export = c("bcf_linear_probit_eta", "predict_linear_bcf_patched", "predict.bcfmodel", 
-                                      "general_params_nbcf", "general_params_nbcf_noshrink", "general_params_nbcf_hs", 
-                                      "general_params_nbcf_robust", "general_params_nbcf_noint", "general_params_bcf", "sl_library", 
-                                      "X_all_mat", "Y_actg", "Z_actg", "fold_ids_outer")) %dopar% {
+  fold_results <- foreach(k = 1:K_folds) %do% {
     
     cat(sprintf("\n[Worker] Starting Fold %d\n", k))
     test_idx <- which(fold_ids_outer == k)
@@ -631,7 +618,7 @@ for (current_seed in cv_seeds) {
   cat("\n--- POOLED OOS INFERENCE RESULTS ---\n")
   cat(sprintf("Semi-Parametric BART Pooled OOS ATE: %.2f\n", mean(oos_cate_nbcf)))
   cat(sprintf("Semi-Parametric BART (No Shrinkage) Pooled OOS ATE: %.2f\n", mean(oos_cate_nbcf_noshrink)))
-
+  cat(sprintf("Semi-Parametric BART (Standard Horseshoe) Pooled OOS ATE: %.2f\n", mean(oos_cate_nbcf_hs)))
   cat(sprintf("Semi-Parametric BART (Robust) Pooled OOS ATE: %.2f\n", mean(oos_cate_nbcf_robust)))
   cat(sprintf("Semi-Parametric BART (No Interactions) Pooled OOS ATE: %.2f\n", mean(oos_cate_nbcf_noint)))
   cat(sprintf("Standard BCF Pooled OOS ATE: %.2f\n", mean(oos_cate_bcf)))
@@ -647,8 +634,6 @@ for (current_seed in cv_seeds) {
   cate_hat_dr_test <- oos_cate_dr
   cate_hat_r_test <- oos_cate_r
   cate_hat_s_test <- oos_cate_s
-  cate_hat_bcf_test <- oos_cate_bcf
-  cate_hat_dr_test <- oos_cate_dr
 
   cd40_test <- actg_sub$cd40
   Y_test <- Y_actg
@@ -1065,12 +1050,12 @@ for (current_seed in cv_seeds) {
   }
   p_het_nbcf_noshrink <- build_heterogeneity_plot(het_draws_nbcf_noshrink_test, "Semi-Parametric BART (No Shrinkage) (CATE - α)")
 
-  # D. Semi-Parametric BART (OLS)
-  het_draws_nbcf_ols_test <- matrix(0, nrow = n_total, ncol = ncol(oos_tau_draws_nbcf_ols[[1]]$het_draws))
+  # D. Semi-Parametric BART (Standard Horseshoe)
+  het_draws_nbcf_hs_test <- matrix(0, nrow = n_total, ncol = ncol(oos_tau_draws_nbcf_hs[[1]]$het_draws))
   for (k in 1:K_folds) {
-    het_draws_nbcf_ols_test[oos_tau_draws_nbcf_ols[[k]]$idx, ] <- oos_tau_draws_nbcf_ols[[k]]$het_draws
+    het_draws_nbcf_hs_test[oos_tau_draws_nbcf_hs[[k]]$idx, ] <- oos_tau_draws_nbcf_hs[[k]]$het_draws
   }
-  p_het_nbcf_ols <- build_heterogeneity_plot(het_draws_nbcf_ols_test, "Semi-Parametric BART (OLS) (CATE - α)")
+  p_het_nbcf_hs <- build_heterogeneity_plot(het_draws_nbcf_hs_test, "Semi-Parametric BART (Standard Horseshoe) (CATE - α)")
 
   # E. Semi-Parametric BART (Robust)
   het_draws_nbcf_robust_test <- matrix(0, nrow = n_total, ncol = ncol(oos_tau_draws_nbcf_robust[[1]]$het_draws))
@@ -1233,6 +1218,4 @@ for (current_seed in cv_seeds) {
 
 } # End of multiple seeds loop
 
-# Stop parallel cluster
-stopCluster(cl)
-cat("\n[INFO] Parallel Cluster Stopped. All tasks completed!\n")
+cat("\n[INFO] All tasks completed!\n")
