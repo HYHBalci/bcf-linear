@@ -334,19 +334,26 @@ for (current_seed in cv_seeds) {
   
   set.seed(current_seed)
   n_total <- nrow(X_all_mat)
-  fold_ids_outer <- sample(rep(1:K_folds, length.out = n_total))
+  fold_ids_outer <- numeric(n_total)
+  idx_1 <- which(Z_actg == 1); idx_0 <- which(Z_actg == 0)
+  fold_ids_outer[idx_1] <- sample(rep(1:K_folds, length.out = length(idx_1)))
+  fold_ids_outer[idx_0] <- sample(rep(1:K_folds, length.out = length(idx_0)))
 
   oos_cate_nbcf <- numeric(n_total)
   oos_cate_nbcf_noshrink <- numeric(n_total)
-  oos_cate_nbcf_ols <- numeric(n_total)
+  oos_cate_nbcf_hs <- numeric(n_total)
   oos_cate_nbcf_robust <- numeric(n_total)
+  oos_cate_nbcf_noint <- numeric(n_total)
   oos_cate_bcf <- numeric(n_total)
   oos_cate_dr <- numeric(n_total)
+  oos_cate_r <- numeric(n_total)
+  oos_cate_s <- numeric(n_total)
   
   oos_tau_draws_nbcf <- list()
   oos_tau_draws_nbcf_noshrink <- list()
-  oos_tau_draws_nbcf_ols <- list()
+  oos_tau_draws_nbcf_hs <- list()
   oos_tau_draws_nbcf_robust <- list()
+  oos_tau_draws_nbcf_noint <- list()
   oos_tau_draws_bcf <- list()
   
   fit_nbcf_fold1 <- NULL
@@ -364,7 +371,7 @@ for (current_seed in cv_seeds) {
     treated_coding_init = 0.5, rfx_prior_var = NULL, 
     random_seed = 1, keep_burnin = FALSE, keep_gfr = FALSE, 
     keep_every = 1, num_chains = 1, verbose = FALSE, 
-    sample_global_prior = "half-cauchy", unlink = TRUE, 
+    sample_global_prior = "hc-hs", unlink = TRUE, 
     propensity_seperate = "none", gibbs = TRUE, step_out = 0.5, 
     max_steps = 150, save_output = FALSE, probit_outcome_model = FALSE, 
     interaction_rule = "continuous_or_binary", standardize_cov = FALSE, 
@@ -375,13 +382,16 @@ for (current_seed in cv_seeds) {
   general_params_nbcf_noshrink <- general_params_nbcf
   general_params_nbcf_noshrink$sample_global_prior <- "none"
   
-  general_params_nbcf_ols <- general_params_nbcf
-  general_params_nbcf_ols$sample_global_prior <- "OLS"
+  general_params_nbcf_hs <- general_params_nbcf
+  general_params_nbcf_hs$sample_global_prior <- "half-cauchy"
 
   general_params_nbcf_robust <- general_params_nbcf
   general_params_nbcf_robust$sample_global_prior <- "half-cauchy"
   general_params_nbcf_robust$robust <- TRUE
   general_params_nbcf_robust$robust_nu <- 3
+
+  general_params_nbcf_noint <- general_params_nbcf
+  general_params_nbcf_noint$interaction_rule <- "none"
 
   general_params_bcf <- list(
     cutpoint_grid_size = 100, standardize = TRUE, 
@@ -408,10 +418,10 @@ for (current_seed in cv_seeds) {
   
   # Parallel execution of K_folds
   fold_results <- foreach(k = 1:K_folds, 
-                          .packages = c("dplyr", "tidyr", "SuperLearner", "glmnet", "gam", "xgboost", "ranger"),
+                          .packages = c("stochtree", "dplyr", "tidyr", "SuperLearner", "glmnet", "gam", "xgboost", "ranger", "grf"),
                           .export = c("bcf_linear_probit_eta", "predict_linear_bcf_patched", "predict.bcfmodel", 
-                                      "general_params_nbcf", "general_params_nbcf_noshrink", "general_params_nbcf_ols", 
-                                      "general_params_nbcf_robust", "general_params_bcf", "sl_library", 
+                                      "general_params_nbcf", "general_params_nbcf_noshrink", "general_params_nbcf_hs", 
+                                      "general_params_nbcf_robust", "general_params_nbcf_noint", "general_params_bcf", "sl_library", 
                                       "X_all_mat", "Y_actg", "Z_actg", "fold_ids_outer")) %dopar% {
     
     cat(sprintf("\n[Worker] Starting Fold %d\n", k))
@@ -449,17 +459,17 @@ for (current_seed in cv_seeds) {
     alpha_draws_nbcf_noshrink <- as.vector(t(fit_nbcf_noshrink$alpha)) * y_std_nbcf_noshrink
     het_draws_nbcf_noshrink_fold <- t(t(tau_draws_nbcf_noshrink_test) - alpha_draws_nbcf_noshrink)
   
-    # --- Semi-Parametric BART (OLS) ---
-    cat(sprintf("  Fold %d: Fitting Semi-Parametric BART (OLS)...\n", k))
-    fit_nbcf_ols <- bcf_linear_probit_eta(
+    # --- Semi-Parametric BART (Standard Horseshoe) ---
+    cat(sprintf("  Fold %d: Fitting Semi-Parametric BART (Standard Horseshoe)...\n", k))
+    fit_nbcf_hs <- bcf_linear_probit_eta(
       X_train = X_train_mat, y_train = Y_train, Z_train = Z_train - 0.5,
       num_gfr = 50, num_burnin = 1000, num_mcmc = 3000,
-      general_params = general_params_nbcf_ols
+      general_params = general_params_nbcf_hs
     )
-    tau_draws_nbcf_ols_test <- predict_linear_bcf_patched(fit_nbcf_ols, X = X_test_mat, Z = Z_test)$tau_hat
-    y_std_nbcf_ols <- fit_nbcf_ols$model_params$outcome_scale
-    alpha_draws_nbcf_ols <- as.vector(t(fit_nbcf_ols$alpha)) * y_std_nbcf_ols
-    het_draws_nbcf_ols_fold <- t(t(tau_draws_nbcf_ols_test) - alpha_draws_nbcf_ols)
+    tau_draws_nbcf_hs_test <- predict_linear_bcf_patched(fit_nbcf_hs, X = X_test_mat, Z = Z_test)$tau_hat
+    y_std_nbcf_hs <- fit_nbcf_hs$model_params$outcome_scale
+    alpha_draws_nbcf_hs <- as.vector(t(fit_nbcf_hs$alpha)) * y_std_nbcf_hs
+    het_draws_nbcf_hs_fold <- t(t(tau_draws_nbcf_hs_test) - alpha_draws_nbcf_hs)
 
     # --- Semi-Parametric BART (Robust) ---
     cat(sprintf("  Fold %d: Fitting Semi-Parametric BART (Robust)...\n", k))
@@ -472,6 +482,18 @@ for (current_seed in cv_seeds) {
     y_std_nbcf_robust <- fit_nbcf_robust$model_params$outcome_scale
     alpha_draws_nbcf_robust <- as.vector(t(fit_nbcf_robust$alpha)) * y_std_nbcf_robust
     het_draws_nbcf_robust_fold <- t(t(tau_draws_nbcf_robust_test) - alpha_draws_nbcf_robust)
+    
+    # --- Semi-Parametric BART (No Interactions) ---
+    cat(sprintf("  Fold %d: Fitting Semi-Parametric BART (No Interactions)...\n", k))
+    fit_nbcf_noint <- bcf_linear_probit_eta(
+      X_train = X_train_mat, y_train = Y_train, Z_train = Z_train - 0.5,
+      num_gfr = 50, num_burnin = 1000, num_mcmc = 3000,
+      general_params = general_params_nbcf_noint
+    )
+    tau_draws_nbcf_noint_test <- predict_linear_bcf_patched(fit_nbcf_noint, X = X_test_mat, Z = Z_test)$tau_hat
+    y_std_nbcf_noint <- fit_nbcf_noint$model_params$outcome_scale
+    alpha_draws_nbcf_noint <- as.vector(t(fit_nbcf_noint$alpha)) * y_std_nbcf_noint
+    het_draws_nbcf_noint_fold <- t(t(tau_draws_nbcf_noint_test) - alpha_draws_nbcf_noint)
     
     # --- Standard BCF ---
     cat(sprintf("  Fold %d: Fitting Standard BCF...\n", k))
@@ -525,6 +547,23 @@ for (current_seed in cv_seeds) {
     X_test_df <- as.data.frame(X_test_mat)
     cate_dr <- as.vector(predict(fit_dr, newdata = X_test_df)$pred)
     
+    # --- R-Learner ---
+    cat(sprintf("  Fold %d: Fitting R-Learner...\n", k))
+    W_rf <- regression_forest(X_train_mat, Z_train, num.trees = 500)
+    Y_rf <- regression_forest(X_train_mat, Y_train, num.trees = 500)
+    W_hat <- predict(W_rf)$predictions
+    Y_hat_cf <- predict(Y_rf)$predictions
+    fit_rl <- causal_forest(X_train_mat, Y_train, Z_train, W.hat = W_hat, Y.hat = Y_hat_cf)
+    cate_r <- as.vector(predict(fit_rl, X_test_mat)$predictions)
+    
+    # --- S-Learner ---
+    cat(sprintf("  Fold %d: Fitting S-Learner...\n", k))
+    X_s_train <- cbind(X_train_df, A = Z_train)
+    fit_sl <- SuperLearner(Y = Y_train, X = X_s_train, SL.library = sl_library, family = gaussian())
+    Xs1v <- X_test_df; Xs1v$A <- 1
+    Xs0v <- X_test_df; Xs0v$A <- 0
+    cate_s <- as.vector(predict(fit_sl, newdata = Xs1v)$pred - predict(fit_sl, newdata = Xs0v)$pred)
+    
     cat(sprintf("\n[Worker] Completed Fold %d\n", k))
     
     list(
@@ -533,13 +572,17 @@ for (current_seed in cv_seeds) {
       tau_draws_nbcf = het_draws_nbcf_fold,
       cate_nbcf_noshrink = rowMeans(tau_draws_nbcf_noshrink_test),
       tau_draws_nbcf_noshrink = het_draws_nbcf_noshrink_fold,
-      cate_nbcf_ols = rowMeans(tau_draws_nbcf_ols_test),
-      tau_draws_nbcf_ols = het_draws_nbcf_ols_fold,
+      cate_nbcf_hs = rowMeans(tau_draws_nbcf_hs_test),
+      tau_draws_nbcf_hs = het_draws_nbcf_hs_fold,
       cate_nbcf_robust = rowMeans(tau_draws_nbcf_robust_test),
       tau_draws_nbcf_robust = het_draws_nbcf_robust_fold,
+      cate_nbcf_noint = rowMeans(tau_draws_nbcf_noint_test),
+      tau_draws_nbcf_noint = het_draws_nbcf_noint_fold,
       cate_bcf = rowMeans(tau_draws_bcf_test),
       tau_draws_bcf = het_draws_bcf_fold,
       cate_dr = cate_dr,
+      cate_r = cate_r,
+      cate_s = cate_s,
       # For fold 1
       fit_nbcf = if (k == 1) fit_nbcf else NULL,
       fit_dr = if (k == 1) fit_dr else NULL,
@@ -560,16 +603,21 @@ for (current_seed in cv_seeds) {
     oos_cate_nbcf_noshrink[test_idx] <- res$cate_nbcf_noshrink
     oos_tau_draws_nbcf_noshrink[[k]] <- list(idx = test_idx, het_draws = res$tau_draws_nbcf_noshrink)
     
-    oos_cate_nbcf_ols[test_idx] <- res$cate_nbcf_ols
-    oos_tau_draws_nbcf_ols[[k]] <- list(idx = test_idx, het_draws = res$tau_draws_nbcf_ols)
+    oos_cate_nbcf_hs[test_idx] <- res$cate_nbcf_hs
+    oos_tau_draws_nbcf_hs[[k]] <- list(idx = test_idx, het_draws = res$tau_draws_nbcf_hs)
     
     oos_cate_nbcf_robust[test_idx] <- res$cate_nbcf_robust
     oos_tau_draws_nbcf_robust[[k]] <- list(idx = test_idx, het_draws = res$tau_draws_nbcf_robust)
+    
+    oos_cate_nbcf_noint[test_idx] <- res$cate_nbcf_noint
+    oos_tau_draws_nbcf_noint[[k]] <- list(idx = test_idx, het_draws = res$tau_draws_nbcf_noint)
     
     oos_cate_bcf[test_idx] <- res$cate_bcf
     oos_tau_draws_bcf[[k]] <- list(idx = test_idx, het_draws = res$tau_draws_bcf)
     
     oos_cate_dr[test_idx] <- res$cate_dr
+    oos_cate_r[test_idx] <- res$cate_r
+    oos_cate_s[test_idx] <- res$cate_s
     
     if (k == 1) {
       fit_nbcf_fold1 <- res$fit_nbcf
@@ -583,16 +631,22 @@ for (current_seed in cv_seeds) {
   cat("\n--- POOLED OOS INFERENCE RESULTS ---\n")
   cat(sprintf("Semi-Parametric BART Pooled OOS ATE: %.2f\n", mean(oos_cate_nbcf)))
   cat(sprintf("Semi-Parametric BART (No Shrinkage) Pooled OOS ATE: %.2f\n", mean(oos_cate_nbcf_noshrink)))
-  cat(sprintf("Semi-Parametric BART (OLS) Pooled OOS ATE: %.2f\n", mean(oos_cate_nbcf_ols)))
+
   cat(sprintf("Semi-Parametric BART (Robust) Pooled OOS ATE: %.2f\n", mean(oos_cate_nbcf_robust)))
+  cat(sprintf("Semi-Parametric BART (No Interactions) Pooled OOS ATE: %.2f\n", mean(oos_cate_nbcf_noint)))
   cat(sprintf("Standard BCF Pooled OOS ATE: %.2f\n", mean(oos_cate_bcf)))
   cat(sprintf("DR-Learner Pooled OOS ATE: %.2f\n", mean(oos_cate_dr)))
 
   # Update variable names for downstream plotting
   cate_hat_nbcf_test <- oos_cate_nbcf
   cate_hat_nbcf_noshrink_test <- oos_cate_nbcf_noshrink
-  cate_hat_nbcf_ols_test <- oos_cate_nbcf_ols
+  cate_hat_nbcf_hs_test <- oos_cate_nbcf_hs
   cate_hat_nbcf_robust_test <- oos_cate_nbcf_robust
+  cate_hat_nbcf_noint_test <- oos_cate_nbcf_noint
+  cate_hat_bcf_test <- oos_cate_bcf
+  cate_hat_dr_test <- oos_cate_dr
+  cate_hat_r_test <- oos_cate_r
+  cate_hat_s_test <- oos_cate_s
   cate_hat_bcf_test <- oos_cate_bcf
   cate_hat_dr_test <- oos_cate_dr
 
@@ -604,13 +658,13 @@ for (current_seed in cv_seeds) {
   # ==============================================================================
   # 6. GGPLOT VISUALIZATIONS (Global & Semi-Parametric) (Pooled OOS)
   # ==============================================================================
-  colors_global <- c("Semi-Parametric BART" = "#008080", "Standard BCF" = "#d95f02", "DR-Learner" = "purple")
-  colors_semi <- c("Semi-Parametric BART" = "#008080", "Semi-Parametric BART (No Shrinkage)" = "#e7298a", "Semi-Parametric BART (OLS)" = "#1b9e77", "Semi-Parametric BART (Robust)" = "#d95f02")
+  colors_global <- c("Semi-Parametric BART" = "#008080", "Standard BCF" = "#d95f02", "DR-Learner" = "purple", "R-Learner" = "blue", "S-Learner" = "darkgreen")
+  colors_semi <- c("Semi-Parametric BART" = "#008080", "Semi-Parametric BART (No Shrinkage)" = "#e7298a", "Semi-Parametric BART (Standard Horseshoe)" = "#1b9e77", "Semi-Parametric BART (Robust)" = "#d95f02", "Semi-Parametric BART (No Interactions)" = "#7570b3")
 
   # A1. Density Distributions (Global)
   density_data_global <- data.frame(
-    CATE = c(cate_hat_nbcf_test, cate_hat_bcf_test, cate_hat_dr_test),
-    Model = rep(c("Semi-Parametric BART", "Standard BCF", "DR-Learner"), each = length(cate_hat_nbcf_test))
+    CATE = c(cate_hat_nbcf_test, cate_hat_bcf_test, cate_hat_dr_test, cate_hat_r_test, cate_hat_s_test),
+    Model = rep(c("Semi-Parametric BART", "Standard BCF", "DR-Learner", "R-Learner", "S-Learner"), each = length(cate_hat_nbcf_test))
   )
 
   p_dist_global <- ggplot(density_data_global, aes(x = CATE, fill = Model, color = Model)) +
@@ -625,8 +679,8 @@ for (current_seed in cv_seeds) {
 
   # A2. Density Distributions (Semi-Parametric)
   density_data_semi <- data.frame(
-    CATE = c(cate_hat_nbcf_test, cate_hat_nbcf_noshrink_test, cate_hat_nbcf_ols_test, cate_hat_nbcf_robust_test),
-    Model = rep(c("Semi-Parametric BART", "Semi-Parametric BART (No Shrinkage)", "Semi-Parametric BART (OLS)", "Semi-Parametric BART (Robust)"), each = length(cate_hat_nbcf_test))
+    CATE = c(cate_hat_nbcf_test, cate_hat_nbcf_noshrink_test, cate_hat_nbcf_hs_test, cate_hat_nbcf_robust_test, cate_hat_nbcf_noint_test),
+    Model = rep(c("Semi-Parametric BART", "Semi-Parametric BART (No Shrinkage)", "Semi-Parametric BART (Standard Horseshoe)", "Semi-Parametric BART (Robust)", "Semi-Parametric BART (No Interactions)"), each = length(cate_hat_nbcf_test))
   )
 
   p_dist_semi <- ggplot(density_data_semi, aes(x = CATE, fill = Model, color = Model)) +
@@ -644,16 +698,22 @@ for (current_seed in cv_seeds) {
     CD4_Baseline = cd40_test,
     CATE_NBCF = cate_hat_nbcf_test,
     CATE_BCF = cate_hat_bcf_test,
-    CATE_DR = cate_hat_dr_test
+    CATE_DR = cate_hat_dr_test,
+    CATE_R = cate_hat_r_test,
+    CATE_S = cate_hat_s_test
   )
 
   p_het_global <- ggplot(plot_data_het_global) +
     geom_smooth(aes(x = CD4_Baseline, y = CATE_NBCF, color = "Semi-Parametric BART"), method = "loess", se = FALSE, linewidth = 1.2) +
     geom_smooth(aes(x = CD4_Baseline, y = CATE_BCF, color = "Standard BCF"), method = "loess", se = FALSE, linewidth = 1.2) +
     geom_smooth(aes(x = CD4_Baseline, y = CATE_DR, color = "DR-Learner"), method = "loess", se = FALSE, linewidth = 1.2) +
+    geom_smooth(aes(x = CD4_Baseline, y = CATE_R, color = "R-Learner"), method = "loess", se = FALSE, linewidth = 1.2) +
+    geom_smooth(aes(x = CD4_Baseline, y = CATE_S, color = "S-Learner"), method = "loess", se = FALSE, linewidth = 1.2) +
     geom_point(aes(x = CD4_Baseline, y = CATE_NBCF, color = "Semi-Parametric BART"), alpha = 0.15) +
     geom_point(aes(x = CD4_Baseline, y = CATE_BCF, color = "Standard BCF"), alpha = 0.15) +
     geom_point(aes(x = CD4_Baseline, y = CATE_DR, color = "DR-Learner"), alpha = 0.15) +
+    geom_point(aes(x = CD4_Baseline, y = CATE_R, color = "R-Learner"), alpha = 0.15) +
+    geom_point(aes(x = CD4_Baseline, y = CATE_S, color = "S-Learner"), alpha = 0.15) +
     scale_color_manual(values = colors_global) +
     labs(title = "Treatment Effect Heterogeneity (Global OOS)",
          subtitle = "Estimated CATE vs Baseline CD4 T-cell Count",
@@ -666,19 +726,22 @@ for (current_seed in cv_seeds) {
     CD4_Baseline = cd40_test,
     CATE_NBCF = cate_hat_nbcf_test,
     CATE_NBCF_NOSHRINK = cate_hat_nbcf_noshrink_test,
-    CATE_NBCF_OLS = cate_hat_nbcf_ols_test,
-    CATE_NBCF_ROBUST = cate_hat_nbcf_robust_test
+    CATE_NBCF_HS = cate_hat_nbcf_hs_test,
+    CATE_NBCF_ROBUST = cate_hat_nbcf_robust_test,
+    CATE_NBCF_NOINT = cate_hat_nbcf_noint_test
   )
 
   p_het_semi <- ggplot(plot_data_het_semi) +
     geom_smooth(aes(x = CD4_Baseline, y = CATE_NBCF, color = "Semi-Parametric BART"), method = "loess", se = FALSE, linewidth = 1.2) +
     geom_smooth(aes(x = CD4_Baseline, y = CATE_NBCF_NOSHRINK, color = "Semi-Parametric BART (No Shrinkage)"), method = "loess", se = FALSE, linewidth = 1.2) +
-    geom_smooth(aes(x = CD4_Baseline, y = CATE_NBCF_OLS, color = "Semi-Parametric BART (OLS)"), method = "loess", se = FALSE, linewidth = 1.2) +
+    geom_smooth(aes(x = CD4_Baseline, y = CATE_NBCF_HS, color = "Semi-Parametric BART (Standard Horseshoe)"), method = "loess", se = FALSE, linewidth = 1.2) +
     geom_smooth(aes(x = CD4_Baseline, y = CATE_NBCF_ROBUST, color = "Semi-Parametric BART (Robust)"), method = "loess", se = FALSE, linewidth = 1.2) +
+    geom_smooth(aes(x = CD4_Baseline, y = CATE_NBCF_NOINT, color = "Semi-Parametric BART (No Interactions)"), method = "loess", se = FALSE, linewidth = 1.2) +
     geom_point(aes(x = CD4_Baseline, y = CATE_NBCF, color = "Semi-Parametric BART"), alpha = 0.15) +
     geom_point(aes(x = CD4_Baseline, y = CATE_NBCF_NOSHRINK, color = "Semi-Parametric BART (No Shrinkage)"), alpha = 0.15) +
-    geom_point(aes(x = CD4_Baseline, y = CATE_NBCF_OLS, color = "Semi-Parametric BART (OLS)"), alpha = 0.15) +
+    geom_point(aes(x = CD4_Baseline, y = CATE_NBCF_HS, color = "Semi-Parametric BART (Standard Horseshoe)"), alpha = 0.15) +
     geom_point(aes(x = CD4_Baseline, y = CATE_NBCF_ROBUST, color = "Semi-Parametric BART (Robust)"), alpha = 0.15) +
+    geom_point(aes(x = CD4_Baseline, y = CATE_NBCF_NOINT, color = "Semi-Parametric BART (No Interactions)"), alpha = 0.15) +
     scale_color_manual(values = colors_semi) +
     labs(title = "Treatment Effect Heterogeneity (Semi-Parametric OOS)",
          subtitle = "Estimated CATE vs Baseline CD4 T-cell Count",
@@ -691,6 +754,8 @@ for (current_seed in cv_seeds) {
     "Semi-Parametric BART" = cate_hat_nbcf_test,
     "Standard BCF" = cate_hat_bcf_test,
     "DR-Learner" = cate_hat_dr_test,
+    "R-Learner" = cate_hat_r_test,
+    "S-Learner" = cate_hat_s_test,
     check.names = FALSE
   )
 
@@ -717,8 +782,9 @@ for (current_seed in cv_seeds) {
   cate_df_semi <- data.frame(
     "Semi-Parametric BART" = cate_hat_nbcf_test,
     "Semi-Parametric BART (No Shrinkage)" = cate_hat_nbcf_noshrink_test,
-    "Semi-Parametric BART (OLS)" = cate_hat_nbcf_ols_test,
+    "Semi-Parametric BART (Standard Horseshoe)" = cate_hat_nbcf_hs_test,
     "Semi-Parametric BART (Robust)" = cate_hat_nbcf_robust_test,
+    "Semi-Parametric BART (No Interactions)" = cate_hat_nbcf_noint_test,
     check.names = FALSE
   )
 
@@ -740,6 +806,63 @@ for (current_seed in cv_seeds) {
           panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
           panel.border = element_blank(), axis.text.x = element_text(angle = 15, vjust = 1, hjust = 1, face = "bold"),
           axis.text.y = element_text(face = "bold"), plot.title = element_text(face = "bold"), legend.position = "right")
+
+  # ==============================================================================
+  # 6B. IN-SAMPLE FITS AND IS vs OOS DIAGNOSTICS
+  # ==============================================================================
+  cat("\n====================================================================\n")
+  cat("   FITTING MODELS ON FULL DATASET (FOR IN-SAMPLE CATE)\n")
+  cat("====================================================================\n")
+  
+  # 1. Semi-Parametric BART (hc-hs)
+  cat("Fitting Semi-Parametric BART (hc-hs) on Full Data...\n")
+  fit_nbcf_is <- bcf_linear_probit_eta(X_train = X_all_mat, y_train = Y_actg, Z_train = Z_actg - 0.5, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = general_params_nbcf)
+  is_cate_nbcf <- rowMeans(predict_linear_bcf_patched(fit_nbcf_is, X = X_all_mat, Z = Z_actg)$tau_hat)
+
+  # 2. Semi-Parametric BART (No Shrinkage)
+  cat("Fitting Semi-Parametric BART (No Shrinkage) on Full Data...\n")
+  fit_nbcf_noshrink_is <- bcf_linear_probit_eta(X_train = X_all_mat, y_train = Y_actg, Z_train = Z_actg - 0.5, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = general_params_nbcf_noshrink)
+  is_cate_nbcf_noshrink <- rowMeans(predict_linear_bcf_patched(fit_nbcf_noshrink_is, X = X_all_mat, Z = Z_actg)$tau_hat)
+
+  # 3. Semi-Parametric BART (Standard Horseshoe)
+  cat("Fitting Semi-Parametric BART (Standard Horseshoe) on Full Data...\n")
+  fit_nbcf_hs_is <- bcf_linear_probit_eta(X_train = X_all_mat, y_train = Y_actg, Z_train = Z_actg - 0.5, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = general_params_nbcf_hs)
+  is_cate_nbcf_hs <- rowMeans(predict_linear_bcf_patched(fit_nbcf_hs_is, X = X_all_mat, Z = Z_actg)$tau_hat)
+
+  # 4. Semi-Parametric BART (Robust)
+  cat("Fitting Semi-Parametric BART (Robust) on Full Data...\n")
+  fit_nbcf_robust_is <- bcf_linear_probit_eta(X_train = X_all_mat, y_train = Y_actg, Z_train = Z_actg - 0.5, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = general_params_nbcf_robust)
+  is_cate_nbcf_robust <- rowMeans(predict_linear_bcf_patched(fit_nbcf_robust_is, X = X_all_mat, Z = Z_actg)$tau_hat)
+
+  # 5. Semi-Parametric BART (No Interactions)
+  cat("Fitting Semi-Parametric BART (No Interactions) on Full Data...\n")
+  fit_nbcf_noint_is <- bcf_linear_probit_eta(X_train = X_all_mat, y_train = Y_actg, Z_train = Z_actg - 0.5, num_gfr = 50, num_burnin = 1000, num_mcmc = 3000, general_params = general_params_nbcf_noint)
+  is_cate_nbcf_noint <- rowMeans(predict_linear_bcf_patched(fit_nbcf_noint_is, X = X_all_mat, Z = Z_actg)$tau_hat)
+
+  # Scatter Plot
+  is_oos_data <- data.frame(
+    IS_CATE = c(is_cate_nbcf, is_cate_nbcf_noshrink, is_cate_nbcf_hs, is_cate_nbcf_robust, is_cate_nbcf_noint),
+    OOS_CATE = c(cate_hat_nbcf_test, cate_hat_nbcf_noshrink_test, cate_hat_nbcf_hs_test, cate_hat_nbcf_robust_test, cate_hat_nbcf_noint_test),
+    Model = rep(c("hc-hs", "No Shrinkage", "Standard Horseshoe", "Robust", "No Interactions"), each = length(is_cate_nbcf))
+  )
+  p_is_oos_scatter <- ggplot(is_oos_data, aes(x = IS_CATE, y = OOS_CATE, color = Model)) +
+    geom_point(alpha = 0.5) +
+    geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "black", linewidth = 1) +
+    facet_wrap(~ Model) +
+    labs(title = "In-Sample vs Out-of-Sample CATE Predictions", subtitle = "Deviation from dotted line indicates overfitting", x = "In-Sample CATE (Full Data)", y = "Out-Of-Sample CATE (10-Fold CV)") +
+    theme_minimal(base_size = 14) + theme(legend.position = "none")
+
+  # Density Overlap
+  density_is_oos <- data.frame(
+    CATE = c(is_oos_data$IS_CATE, is_oos_data$OOS_CATE),
+    Type = rep(c("In-Sample", "Out-Of-Sample"), each = nrow(is_oos_data)),
+    Model = rep(is_oos_data$Model, 2)
+  )
+  p_is_oos_density <- ggplot(density_is_oos, aes(x = CATE, fill = Type, color = Type)) +
+    geom_density(alpha = 0.4) +
+    facet_wrap(~ Model) +
+    labs(title = "Density Overlap: IS vs OOS CATEs", subtitle = "Wide IS density collapsing to narrow OOS density proves lack of shrinkage", x = "Estimated CATE", y = "Density") +
+    theme_minimal(base_size = 14)
 
   # ==============================================================================
   # 7. IMPORTANCE ANALYSIS (Evaluated on Fold 1 Parameters)
@@ -779,15 +902,17 @@ for (current_seed in cv_seeds) {
 
   # Evaluate ONLY on Holdout Data
   eval_df_test <- data.frame(Y = Y_test, Z = Z_test, 
-                             CATE_NBCF = cate_hat_nbcf_test, CATE_NBCF_NOSHRINK = cate_hat_nbcf_noshrink_test, CATE_NBCF_OLS = cate_hat_nbcf_ols_test, CATE_NBCF_ROBUST = cate_hat_nbcf_robust_test,
-                             CATE_BCF = cate_hat_bcf_test, CATE_DR = cate_hat_dr_test)
+                             CATE_NBCF = cate_hat_nbcf_test, CATE_NBCF_NOSHRINK = cate_hat_nbcf_noshrink_test, CATE_NBCF_HS = cate_hat_nbcf_hs_test, CATE_NBCF_ROBUST = cate_hat_nbcf_robust_test,
+                             CATE_BCF = cate_hat_bcf_test, CATE_DR = cate_hat_dr_test, CATE_R = cate_hat_r_test, CATE_S = cate_hat_s_test)
 
   uplift_nbcf <- get_eval_curves(eval_df_test, "CATE_NBCF", "Semi-Parametric BART")
   uplift_nbcf_noshrink <- get_eval_curves(eval_df_test, "CATE_NBCF_NOSHRINK", "Semi-Parametric BART (No Shrinkage)")
-  uplift_nbcf_ols <- get_eval_curves(eval_df_test, "CATE_NBCF_OLS", "Semi-Parametric BART (OLS)")
+  uplift_nbcf_hs <- get_eval_curves(eval_df_test, "CATE_NBCF_HS", "Semi-Parametric BART (Standard Horseshoe)")
   uplift_nbcf_robust <- get_eval_curves(eval_df_test, "CATE_NBCF_ROBUST", "Semi-Parametric BART (Robust)")
   uplift_bcf <- get_eval_curves(eval_df_test, "CATE_BCF", "Standard BCF")
   uplift_dr <- get_eval_curves(eval_df_test, "CATE_DR", "DR-Learner")
+  uplift_r <- get_eval_curves(eval_df_test, "CATE_R", "R-Learner")
+  uplift_s <- get_eval_curves(eval_df_test, "CATE_S", "S-Learner")
 
   calc_net_auuc <- function(df, metric) { 
     raw_auc <- sum(diff(df$frac) * (head(df[[metric]], -1) + tail(df[[metric]], -1)) / 2)
@@ -797,16 +922,18 @@ for (current_seed in cv_seeds) {
 
   auuc_nbcf <- calc_net_auuc(uplift_nbcf, "uplift")
   auuc_nbcf_noshrink <- calc_net_auuc(uplift_nbcf_noshrink, "uplift")
-  auuc_nbcf_ols <- calc_net_auuc(uplift_nbcf_ols, "uplift")
+  auuc_nbcf_hs <- calc_net_auuc(uplift_nbcf_hs, "uplift")
   auuc_nbcf_robust <- calc_net_auuc(uplift_nbcf_robust, "uplift")
   auuc_bcf <- calc_net_auuc(uplift_bcf, "uplift")
   auuc_dr <- calc_net_auuc(uplift_dr, "uplift")
+  auuc_r <- calc_net_auuc(uplift_r, "uplift")
+  auuc_s <- calc_net_auuc(uplift_s, "uplift")
 
   final_uplift <- tail(uplift_nbcf$uplift, 1)
 
   # Global Uplift
-  uplift_plot_data_global <- bind_rows(uplift_nbcf, uplift_bcf, uplift_dr)
-  auuc_label_global <- sprintf("Net AUUC (Model - Random):\nSemi-Parametric BART = %.1f\nStandard BCF = %.1f\nDR-Learner = %.1f", auuc_nbcf, auuc_bcf, auuc_dr)
+  uplift_plot_data_global <- bind_rows(uplift_nbcf, uplift_bcf, uplift_dr, uplift_r, uplift_s)
+  auuc_label_global <- sprintf("Net AUUC (Model - Random):\nSemi-Parametric BART = %.1f\nStandard BCF = %.1f\nDR-Learner = %.1f\nR-Learner = %.1f\nS-Learner = %.1f", auuc_nbcf, auuc_bcf, auuc_dr, auuc_r, auuc_s)
 
   p_uplift_smooth_global <- ggplot(uplift_plot_data_global, aes(x = frac, y = uplift, color = Model)) +
     geom_line(linewidth = 1.2) +
@@ -818,8 +945,8 @@ for (current_seed in cv_seeds) {
     scale_color_manual(values = colors_global) + theme_minimal(base_size = 14) + theme(plot.title = element_text(face = "bold"), legend.position = "bottom")
 
   # Semi-Parametric Uplift
-  uplift_plot_data_semi <- bind_rows(uplift_nbcf, uplift_nbcf_noshrink, uplift_nbcf_ols, uplift_nbcf_robust)
-  auuc_label_semi <- sprintf("Net AUUC (Model - Random):\nSemi-Parametric = %.1f\nNo Shrinkage = %.1f\nOLS = %.1f\nRobust = %.1f", auuc_nbcf, auuc_nbcf_noshrink, auuc_nbcf_ols, auuc_nbcf_robust)
+  uplift_plot_data_semi <- bind_rows(uplift_nbcf, uplift_nbcf_noshrink, uplift_nbcf_hs, uplift_nbcf_robust)
+  auuc_label_semi <- sprintf("Net AUUC (Model - Random):\nSemi-Parametric = %.1f\nNo Shrinkage = %.1f\nStandard Horseshoe = %.1f\nRobust = %.1f", auuc_nbcf, auuc_nbcf_noshrink, auuc_nbcf_hs, auuc_nbcf_robust)
 
   p_uplift_smooth_semi <- ggplot(uplift_plot_data_semi, aes(x = frac, y = uplift, color = Model)) +
     geom_line(linewidth = 1.2) +
@@ -829,6 +956,23 @@ for (current_seed in cv_seeds) {
     labs(title = "Pooled Out-of-Sample Robust Uplift Curves (Semi-Parametric)", subtitle = "Evaluated on the 10-Fold Cross-Validated predictions",
          x = "Fraction of Population Treated", y = "Cumulative True Uplift") +
     scale_color_manual(values = colors_semi) + theme_minimal(base_size = 14) + theme(plot.title = element_text(face = "bold"), legend.position = "bottom")
+
+  # --- CATE R-SQUARED COMPUTATIONS ---
+  cat("\n--- OUT-OF-SAMPLE CATE PSEUDO R-SQUARED ---\n")
+  pi_hat_full <- mean(Z_test)
+  sl_mu_full <- SuperLearner(Y = Y_test, X = as.data.frame(X_all_mat), SL.library = sl_library, family = gaussian())
+  mu_hat_full <- predict(sl_mu_full)$pred
+  pseudo_Y_aipw_full <- (Z_test - pi_hat_full) / (pi_hat_full * (1 - pi_hat_full)) * (Y_test - mu_hat_full)
+  
+  calc_r2 <- function(y_true, y_pred) {
+    1 - (sum((y_true - y_pred)^2) / sum((y_true - mean(y_true))^2))
+  }
+  
+  cat(sprintf("Semi-Parametric BART AIPW R2: %.4f\n", calc_r2(pseudo_Y_aipw_full, cate_hat_nbcf_test)))
+  cat(sprintf("Standard BCF AIPW R2: %.4f\n", calc_r2(pseudo_Y_aipw_full, cate_hat_bcf_test)))
+  cat(sprintf("DR-Learner AIPW R2: %.4f\n", calc_r2(pseudo_Y_aipw_full, cate_hat_dr_test)))
+  cat(sprintf("R-Learner AIPW R2: %.4f\n", calc_r2(pseudo_Y_aipw_full, cate_hat_r_test)))
+  cat(sprintf("S-Learner AIPW R2: %.4f\n", calc_r2(pseudo_Y_aipw_full, cate_hat_s_test)))
 
 
   # ==============================================================================
@@ -1074,7 +1218,7 @@ for (current_seed in cv_seeds) {
   ggsave(file.path(plot_dir, "05_SemiParametric_Shapley.png"), p_shap_importance, width = plot_w, height = plot_h, dpi = plot_dpi, bg = "white")
   ggsave(file.path(plot_dir, "06a_Heterogeneity_Bands_SemiParametric.png"), p_het_nbcf, width = 10, height = 7, dpi = plot_dpi, bg = "white")
   ggsave(file.path(plot_dir, "06b_Heterogeneity_Bands_SemiParametric_NoShrinkage.png"), p_het_nbcf_noshrink, width = 10, height = 7, dpi = plot_dpi, bg = "white")
-  ggsave(file.path(plot_dir, "06c_Heterogeneity_Bands_SemiParametric_OLS.png"), p_het_nbcf_ols, width = 10, height = 7, dpi = plot_dpi, bg = "white")
+
   ggsave(file.path(plot_dir, "06d_Heterogeneity_Bands_SemiParametric_Robust.png"), p_het_nbcf_robust, width = 10, height = 7, dpi = plot_dpi, bg = "white")
   ggsave(file.path(plot_dir, "06e_Heterogeneity_Bands_Standard_BCF.png"), p_het_bcf, width = 10, height = 7, dpi = plot_dpi, bg = "white")
   
@@ -1083,6 +1227,8 @@ for (current_seed in cv_seeds) {
   ggsave(file.path(plot_dir, "07b_Shapley_Fractional_Contribution_New.png"), p_fractional, width = plot_w, height = plot_h, dpi = plot_dpi, bg = "white")
   ggsave(file.path(plot_dir, "07c_Shapley_DualDensity_Uncertainty_New.png"), p_uncertainty, width = 8, height = 10, dpi = plot_dpi, bg = "white")
 
+  ggsave(file.path(plot_dir, "08a_IS_vs_OOS_Scatter.png"), p_is_oos_scatter, width = 12, height = 7, dpi = plot_dpi, bg = "white")
+  ggsave(file.path(plot_dir, "08b_IS_vs_OOS_Density.png"), p_is_oos_density, width = 12, height = 7, dpi = plot_dpi, bg = "white")
   cat(sprintf("All out-of-sample plots successfully saved to: %s\n", plot_dir))
 
 } # End of multiple seeds loop
